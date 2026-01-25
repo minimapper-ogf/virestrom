@@ -1,5 +1,23 @@
 # Virestrom
-Virestrom is a simple building tag tool designed for OGF:Mishota. 
+Virestrom is a simple tagging tool desgined for OGF:Mishota
+
+## Features
+Features include: 
+- Building Tagger
+- Admin Level Tagger
+
+All features can be found in tools.
+
+### Building Tagging
+With a area seclected, you can use Create Building Tags or CTRL+SHIFT+X and a popup will appear.
+From the popup you can choose building type and its address. The rest of the values such as height, floor count, residents (for houses), employees (for commercial and industrial), and ms:ccode (for commercial and industrial) are added in the background after applying changes.
+
+### Admin Level Tagging
+With a area seclected (or group of ways to make an area seclected), you can use Create Admin Bound Tags or ALT+SHIFT+F2 (still need to get a proper keybind cuz CTRL+SHIFT+V is taken by paste.
+From the popup you can choose name, population, admin level, what county its in, and what state its in. Admin level and what county its in are saved during the session to save filling out fields. Is_in:state saves acrost sessions.
+
+#### Extra Notes
+Admin Level Tagging is still not fully complete lacking things such as finding inner ways and properly giving them the right role and lacking township tags. As also shown it still needs a keybind as well. 
 
 ## Installation
 Download the .jar file in releases and navigate it to your JOSM plugins folder. Info on where your plugins folder is can be found [here](https://wiki.openstreetmap.org/wiki/JOSM/Plugins#Manually_install_JOSM_plugins).
