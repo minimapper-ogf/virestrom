@@ -13,7 +13,7 @@ With a area seclected, you can use Create Building Tags or CTRL+SHIFT+X and a po
 From the popup you can choose building type and its address. The rest of the values such as height, floor count, residents (for houses), employees (for commercial and industrial), and ms:ccode (for commercial and industrial) are added in the background after applying changes.
 
 ### Admin Level Tagging
-With a area seclected (or group of ways to make an area seclected), you can use Create Admin Bound Tags or ALT+SHIFT+F2 (still need to get a proper keybind cuz CTRL+SHIFT+V is taken by paste.
+With a area seclected (or group of ways to make an area seclected), you can use Create Admin Bound Tags or ALT+SHIFT+Q
 From the popup you can choose name, population, admin level, what county its in, and what state its in. Admin level and what county its in are saved during the session to save filling out fields. Is_in:state saves acrost sessions.
 
 #### Extra Notes
