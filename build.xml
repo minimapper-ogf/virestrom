@@ -8,8 +8,8 @@
               value="org.openstreetmap.josm.plugins.virestrom.VirestromPlugin"/>
     <property name="plugin.description"
               value="Generate weighted building tags for JOSM"/>
-    <property name="plugin.author" value="YourName"/>
-    <property name="plugin.version" value="1.0"/>
+    <property name="plugin.author" value="minimapper"/>
+    <property name="plugin.version" value="1.0.2"/>
     <property name="plugin.main.version" value="19000"/>
 
     <import file="${josm.home}/build.xml"/>
