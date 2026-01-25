@@ -7,7 +7,7 @@
     <property name="plugin.class"
               value="org.openstreetmap.josm.plugins.virestrom.VirestromPlugin"/>
     <property name="plugin.description"
-              value="Generate weighted building tags for JOSM"/>
+              value="Streamlined building tagging for OGF:Mishota"/>
     <property name="plugin.author" value="minimapper"/>
     <property name="plugin.version" value="1.0.2"/>
     <property name="plugin.main.version" value="19000"/>
