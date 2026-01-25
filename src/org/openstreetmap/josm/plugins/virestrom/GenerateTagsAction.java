@@ -54,16 +54,17 @@ public class GenerateTagsAction extends JosmAction {
         JComboBox<String> typeCombo = new JComboBox<>(types);
         typeCombo.setSelectedIndex(lastTypeIndex);
 
-        JTextField cityField = new JTextField(lastCity);
-        JTextField postField = new JTextField(lastPostcode);
-        JTextField streetField = new JTextField(lastStreet);
-        JTextField houseNumField = new JTextField();
+        JTextField cityField = new JTextField(lastCity, 20);
+        JTextField postField = new JTextField(lastPostcode, 20);
+        JTextField streetField = new JTextField(lastStreet, 20);
+        JTextField houseNumField = new JTextField("", 20);
 
-        // Permanent Settings (Loaded from JOSM config)
-        JTextField countryField = new JTextField(Config.getPref().get("virestrom.country", "FSA"));
-        JTextField stateField = new JTextField(Config.getPref().get("virestrom.state", "MS"));
+        JTextField countryField = new JTextField(Config.getPref().get("virestrom.country", "FSA"), 20);
+        JTextField stateField = new JTextField(Config.getPref().get("virestrom.state", "MS"), 20);
 
-        JPanel panel = new JPanel(new GridLayout(0, 2, 5, 5));
+
+        JPanel panel = new JPanel(new GridLayout(0, 2, 10, 10));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
         panel.add(new JLabel("Building Type:")); panel.add(typeCombo);
         panel.add(new JLabel("City:")); panel.add(cityField);
