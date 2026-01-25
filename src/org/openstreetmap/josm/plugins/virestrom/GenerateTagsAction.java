@@ -27,12 +27,12 @@ public class GenerateTagsAction extends JosmAction {
 
     public GenerateTagsAction() {
         super(
-            "Generate Building Tags (Virestrom)",
+            "Create Building Tags",
             "building",
             "Generate weighted building tags for different types",
             Shortcut.registerShortcut(
                 "virestrom:generate",
-                "Generate Building Tags (Virestrom)",
+                "Create Building Tags",
                 KeyEvent.VK_X,
                 Shortcut.CTRL_SHIFT
             ),
@@ -82,7 +82,7 @@ public class GenerateTagsAction extends JosmAction {
 
         ExtendedDialog diag = new ExtendedDialog(
             MainApplication.getMainFrame(),
-            "Virestrom Suite",
+            "Virestrom Building Tag Creator",
             new String[] {"Apply", "Cancel"}
         );
         diag.setContent(panel);
