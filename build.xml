@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="virestrom" default="dist">
+
+    <property name="josm.home" value="/usr/share/josm"/>
+
+    <property name="plugin.name" value="virestrom"/>
+    <property name="plugin.class"
+              value="org.openstreetmap.josm.plugins.virestrom.VirestromPlugin"/>
+    <property name="plugin.description"
+              value="Generate weighted building tags for JOSM"/>
+    <property name="plugin.author" value="YourName"/>
+    <property name="plugin.version" value="1.0"/>
+    <property name="plugin.main.version" value="19000"/>
+
+    <import file="${josm.home}/build.xml"/>
+
+</project>

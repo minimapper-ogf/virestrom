@@ -4,8 +4,7 @@ Virestrom is a simple building tag tool designed for OGF:Mishota.
 ## Installation
 Download the .jar file in releases and navigate it to your JOSM plugins folder. [More Info](https://wiki.openstreetmap.org/wiki/JOSM/Plugins#Manually_install_JOSM_plugins)
 
-## Developing 
-(more or less just personal notes)
+## Notes
 For Building:
 
 Modify manifest.txt with version.

@@ -1,0 +1,6 @@
+Manifest-Version: 1.0
+Plugin-Class: org.openstreetmap.josm.plugins.virestrom.VirestromPlugin
+Plugin-Description: Streamlined building tagging for OGF:Mishota
+Plugin-Version: 0.4.0
+Plugin-Mainversion: 19000
+Plugin-Author: minimapper
