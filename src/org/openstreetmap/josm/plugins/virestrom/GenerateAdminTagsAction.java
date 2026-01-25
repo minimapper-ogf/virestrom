@@ -18,13 +18,14 @@ public class GenerateAdminTagsAction extends JosmAction {
 
     private static String lastAdminLevel = "8";
     private static String lastCounty = "";
+    private static String lastTownship = ""; // Session memory for township
 
     public GenerateAdminTagsAction() {
         super(
             "Create Admin Bound Tags",
             "boundary",
-            "Create administrative boundary relations (innter ways must be done manually)",
-            Shortcut.registerShortcut("virestrom:admin", "Create Admin Tags", KeyEvent.VK_V, Shortcut.CTRL_SHIFT),
+            "Create administrative boundary relations (inner ways must be done manually)",
+            Shortcut.registerShortcut("virestrom:admin", "Create Admin Tags", KeyEvent.VK_Q, Shortcut.CTRL_SHIFT),
             false
         );
     }
@@ -48,24 +49,35 @@ public class GenerateAdminTagsAction extends JosmAction {
         JTextField popField = new JTextField("", 20);
         JTextField adminLevelField = new JTextField(lastAdminLevel, 20);
         JTextField countyField = new JTextField(lastCounty, 20);
+        JTextField townshipField = new JTextField(lastTownship, 20); // New Field
         JTextField stateField = new JTextField(Config.getPref().get("virestrom.state", "MS"), 20);
 
         JPanel panel = new JPanel(new GridLayout(0, 2, 10, 10));
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
         panel.add(new JLabel("Name:")); panel.add(nameField);
         panel.add(new JLabel("Population:")); panel.add(popField);
         panel.add(new JLabel("Admin Level:")); panel.add(adminLevelField);
+        panel.add(new JLabel("is_in:township:")); panel.add(townshipField); // Added to UI
         panel.add(new JLabel("is_in:county:")); panel.add(countyField);
-        panel.add(new JLabel("is_in:state (Perm):")); panel.add(stateField);
+        panel.add(new JLabel("is_in:state:")); panel.add(stateField);
 
-        ExtendedDialog diag = new ExtendedDialog(MainApplication.getMainFrame(), "Virestrom Admin Level Tag Creator", new String[] {"Create Relation", "Cancel"});
+        ExtendedDialog diag = new ExtendedDialog(
+            MainApplication.getMainFrame(),
+            "Virestrom Admin Level Tag Creator",
+            new String[] {"Create Relation", "Cancel"}
+        );
         diag.setContent(panel);
         diag.showDialog();
 
         if (diag.getValue() != 1) return;
 
+        // Save session memory
         lastAdminLevel = adminLevelField.getText();
         lastCounty = countyField.getText();
+        lastTownship = townshipField.getText();
+
+        // Save permanent memory
         Config.getPref().put("virestrom.state", stateField.getText());
 
         ds.beginUpdate();
@@ -76,24 +88,18 @@ public class GenerateAdminTagsAction extends JosmAction {
             newRelation.put("name", nameField.getText());
             newRelation.put("admin_level", lastAdminLevel);
             newRelation.put("is_in:state", stateField.getText());
+
+            // Conditional Tags
             if (!popField.getText().isEmpty()) newRelation.put("population", popField.getText());
             if (!lastCounty.isEmpty()) newRelation.put("is_in:county", lastCounty);
+            if (!lastTownship.isEmpty()) newRelation.put("is_in:township", lastTownship); // Added Logic
 
-            // AUTO-ROLE DETECTION LOGIC
-            // We find the 'largest' way or group of ways.
-            // Simplified for OGF: any way that has its nodes completely contained
-            // within the area of another selected way is 'inner'.
-
+            // Simple role detection
             for (Way w : selectedWays) {
-                String role = "outer"; // Default
-
+                String role = "outer";
                 for (Way other : selectedWays) {
                     if (w == other) continue;
-
-                    // Check if 'w' is inside 'other'
-                    // Using Bounding Box as a fast check, then checking a sample node
                     if (other.isClosed() && other.getBBox().contains(w.getBBox())) {
-                        // If 'other' contains the first node of 'w', it's an enclave
                         if (other.containsNode(w.getNode(0))) {
                             role = "inner";
                             break;
