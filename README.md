@@ -4,11 +4,11 @@ Virestrom is a simple building tag tool designed for OGF:Mishota.
 ## Installation
 Download the .jar file in releases and navigate it to your JOSM plugins folder. Info on where your plugins folder is can be found [here](https://wiki.openstreetmap.org/wiki/JOSM/Plugins#Manually_install_JOSM_plugins).
 
-## Notes
-For Building:
+## Development
+I dont intend others to add to this but if you want to heres a few quick commands such as building and easially moving the file to your plugins folder :)
 
 Modify manifest.txt with version.
-Run the following:
+Run the following for building:
 
 ``` bash
 javac -classpath ./josm-tested.jar -d bin src/org/openstreetmap/josm/plugins/virestrom/*.java
@@ -16,7 +16,7 @@ javac -classpath ./josm-tested.jar -d bin src/org/openstreetmap/josm/plugins/vir
 jar cfm dist/virestrom.jar manifest.txt -C bin .
 ```
 
-Move the .jar file to JOSM's plugins folder.
+Move the .jar to JOSM's plugins folder:
 
 ### MacOS
 ``` bash
