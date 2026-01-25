@@ -17,7 +17,7 @@ With a area seclected (or group of ways to make an area seclected), you can use 
 From the popup you can choose name, population, admin level, what county its in, and what state its in. Admin level and what county its in are saved during the session to save filling out fields. Is_in:state saves acrost sessions.
 
 #### Extra Notes
-Admin Level Tagging is still not fully complete lacking things such as finding inner ways and properly giving them the right role and lacking township tags. As also shown it still needs a keybind as well. 
+Admin Level Tagging still does not handle inside ways. This might be added later on if it becomes enough of an issue but for now that has to be done manually
 
 ## Installation
 Download the .jar file in releases and navigate it to your JOSM plugins folder. Info on where your plugins folder is can be found [here](https://wiki.openstreetmap.org/wiki/JOSM/Plugins#Manually_install_JOSM_plugins).
