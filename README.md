@@ -14,6 +14,26 @@ Run the following:
 javac -classpath ./josm-tested.jar -d bin src/org/openstreetmap/josm/plugins/virestrom/*.java
 
 jar cfm dist/virestrom.jar manifest.txt -C bin .
+```
 
+Move the .jar file to JOSM's plugins folder.
+
+### MacOS
+``` bash
+cp dist/virestrom.jar ~/Library/JOSM/plugins/
+```
+
+### Windows
+``` bash
+copy dist\virestrom.jar %APPDATA%\JOSM\plugins\
+```
+
+### Linux Standalone
+``` bash
+cp dist/virestrom.jar ~/.local/share/JOSM/plugins/
+```
+
+### Flatpak
+``` bash
 cp dist/virestrom.jar ~/.var/app/org.openstreetmap.josm/data/JOSM/plugins/
 ```
