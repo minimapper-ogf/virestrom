@@ -10,6 +10,7 @@ import java.awt.Color;
 
 import org.openstreetmap.josm.actions.JosmAction;
 import org.openstreetmap.josm.data.osm.OsmPrimitive;
+import org.openstreetmap.josm.data.osm.Way;
 import org.openstreetmap.josm.gui.MainApplication;
 import org.openstreetmap.josm.gui.ExtendedDialog;
 import org.openstreetmap.josm.tools.Shortcut;
@@ -19,10 +20,12 @@ public class GenerateTagsAction extends JosmAction {
 
     private static final Random RANDOM = new Random();
 
-    // Session memory (resets on JOSM restart)
+    // Session memory
     private static String lastCity = "";
     private static String lastPostcode = "";
     private static String lastStreet = "";
+    private static String lastHouseNumber = ""; 
+    private static String lastIncrement = "1";
     private static int lastTypeIndex = 0;
 
     public GenerateTagsAction() {
@@ -49,6 +52,16 @@ public class GenerateTagsAction extends JosmAction {
         Collection<OsmPrimitive> selection = ds.getSelected();
         if (selection.isEmpty()) return;
 
+        // --- NEW LOGIC: Look for a road name in the selection ---
+        String detectedStreet = lastStreet; 
+        for (OsmPrimitive osm : selection) {
+            if (osm instanceof Way && osm.hasTag("name")) {
+                // If we find a way with a name (like a highway), use it!
+                detectedStreet = osm.get("name");
+                break; 
+            }
+        }
+
         // UI Components
         String[] types = {"House", "Industrial", "Commercial"};
         JComboBox<String> typeCombo = new JComboBox<>(types);
@@ -56,12 +69,12 @@ public class GenerateTagsAction extends JosmAction {
 
         JTextField cityField = new JTextField(lastCity, 20);
         JTextField postField = new JTextField(lastPostcode, 20);
-        JTextField streetField = new JTextField(lastStreet, 20);
-        JTextField houseNumField = new JTextField("", 20);
+        JTextField streetField = new JTextField(detectedStreet, 20); // Uses detected name
+        JTextField houseNumField = new JTextField(lastHouseNumber, 20);
+        JTextField incrementField = new JTextField(lastIncrement, 20);
 
         JTextField countryField = new JTextField(Config.getPref().get("virestrom.country", "FSA"), 20);
         JTextField stateField = new JTextField(Config.getPref().get("virestrom.state", "MS"), 20);
-
 
         JPanel panel = new JPanel(new GridLayout(0, 2, 10, 10));
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
@@ -71,8 +84,8 @@ public class GenerateTagsAction extends JosmAction {
         panel.add(new JLabel("Postcode:")); panel.add(postField);
         panel.add(new JLabel("Street:")); panel.add(streetField);
         panel.add(new JLabel("House Number:")); panel.add(houseNumField);
+        panel.add(new JLabel("Increment by:")); panel.add(incrementField);
 
-        // Visual separator
         panel.add(new JSeparator()); panel.add(new JSeparator());
         JLabel label = new JLabel("Regional (Permanent):");
         label.setForeground(Color.GRAY);
@@ -91,26 +104,37 @@ public class GenerateTagsAction extends JosmAction {
 
         if (diag.getValue() != 1) return;
 
-        // Save session data
+        String currentHouseNum = houseNumField.getText();
+        String currentIncStr = incrementField.getText();
+
         lastTypeIndex = typeCombo.getSelectedIndex();
         lastCity = cityField.getText();
         lastPostcode = postField.getText();
-        lastStreet = streetField.getText();
+        lastStreet = streetField.getText(); // Save the street for next time
+        lastIncrement = currentIncStr;
 
-        // Save permanent data to JOSM Config
+        try {
+            int num = Integer.parseInt(currentHouseNum);
+            int inc = Integer.parseInt(currentIncStr);
+            lastHouseNumber = String.valueOf(num + inc);
+        } catch (NumberFormatException ex) {
+            lastHouseNumber = currentHouseNum;
+        }
+
         Config.getPref().put("virestrom.country", countryField.getText());
         Config.getPref().put("virestrom.state", stateField.getText());
 
         ds.beginUpdate();
         try {
             for (OsmPrimitive osm : selection) {
-                // Apply Address Tags
+                // IMPORTANT: Only apply tags to things that AREN'T the road we selected
+                if (osm instanceof Way && osm.hasTag("highway")) continue;
+
                 if (!lastCity.isEmpty()) osm.put("addr:city", lastCity);
                 if (!lastPostcode.isEmpty()) osm.put("addr:postcode", lastPostcode);
                 if (!lastStreet.isEmpty()) osm.put("addr:street", lastStreet);
-                if (!houseNumField.getText().isEmpty()) osm.put("addr:housenumber", houseNumField.getText());
+                if (!currentHouseNum.isEmpty()) osm.put("addr:housenumber", currentHouseNum);
 
-                // Use the values directly from the input fields
                 osm.put("addr:country", countryField.getText());
                 osm.put("addr:state", stateField.getText());
 
