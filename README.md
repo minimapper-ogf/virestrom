@@ -10,7 +10,7 @@ All features can be found in tools.
 
 ### Building Tagging
 With a area seclected, you can use Create Building Tags or CTRL+SHIFT+X and a popup will appear.
-From the popup you can choose building type and its address. The rest of the values such as height, floor count, residents (for houses), employees (for commercial and industrial), and ms:ccode (for commercial and industrial) are added in the background after applying changes.
+From the popup you can choose building type and its address. The rest of the values such as height, floor count, residents (for houses), employees (for commercial and industrial), and ms:ccode (for commercial and industrial) are added in the background after applying changes. With v1.2.0 you can now choose to increment the address value by a number (you can also start from a number and count down) and you can also seclect a road way that contains a name= tag and it will apply the name tag to the road address automatically.
 
 ### Admin Level Tagging
 With a area seclected (or group of ways to make an area seclected), you can use Create Admin Bound Tags or ALT+SHIFT+Q
