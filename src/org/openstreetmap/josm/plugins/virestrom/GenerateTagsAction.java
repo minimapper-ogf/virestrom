@@ -24,8 +24,9 @@ public class GenerateTagsAction extends JosmAction {
     private static String lastCity = "";
     private static String lastPostcode = "";
     private static String lastStreet = "";
-    private static String lastHouseNumber = ""; 
+    private static String lastHouseNumber = "";
     private static String lastIncrement = "1";
+    private static String lastTargetRes = "2.5"; // Default target average
     private static int lastTypeIndex = 0;
 
     public GenerateTagsAction() {
@@ -52,13 +53,11 @@ public class GenerateTagsAction extends JosmAction {
         Collection<OsmPrimitive> selection = ds.getSelected();
         if (selection.isEmpty()) return;
 
-        // --- NEW LOGIC: Look for a road name in the selection ---
-        String detectedStreet = lastStreet; 
+        String detectedStreet = lastStreet;
         for (OsmPrimitive osm : selection) {
             if (osm instanceof Way && osm.hasTag("name")) {
-                // If we find a way with a name (like a highway), use it!
                 detectedStreet = osm.get("name");
-                break; 
+                break;
             }
         }
 
@@ -69,9 +68,10 @@ public class GenerateTagsAction extends JosmAction {
 
         JTextField cityField = new JTextField(lastCity, 20);
         JTextField postField = new JTextField(lastPostcode, 20);
-        JTextField streetField = new JTextField(detectedStreet, 20); // Uses detected name
+        JTextField streetField = new JTextField(detectedStreet, 20);
         JTextField houseNumField = new JTextField(lastHouseNumber, 20);
         JTextField incrementField = new JTextField(lastIncrement, 20);
+        JTextField targetResField = new JTextField(lastTargetRes, 20); // NEW FIELD
 
         JTextField countryField = new JTextField(Config.getPref().get("virestrom.country", "FSA"), 20);
         JTextField stateField = new JTextField(Config.getPref().get("virestrom.state", "MS"), 20);
@@ -80,6 +80,7 @@ public class GenerateTagsAction extends JosmAction {
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
         panel.add(new JLabel("Building Type:")); panel.add(typeCombo);
+        panel.add(new JLabel("Target Residents:")); panel.add(targetResField); // Added to UI
         panel.add(new JLabel("City:")); panel.add(cityField);
         panel.add(new JLabel("Postcode:")); panel.add(postField);
         panel.add(new JLabel("Street:")); panel.add(streetField);
@@ -104,18 +105,25 @@ public class GenerateTagsAction extends JosmAction {
 
         if (diag.getValue() != 1) return;
 
-        String currentHouseNum = houseNumField.getText();
-        String currentIncStr = incrementField.getText();
-
+        // Save session memory
         lastTypeIndex = typeCombo.getSelectedIndex();
         lastCity = cityField.getText();
         lastPostcode = postField.getText();
-        lastStreet = streetField.getText(); // Save the street for next time
-        lastIncrement = currentIncStr;
+        lastStreet = streetField.getText();
+        lastIncrement = incrementField.getText();
+        lastTargetRes = targetResField.getText();
 
+        double targetResidentsValue;
+        try {
+            targetResidentsValue = Double.parseDouble(lastTargetRes);
+        } catch (NumberFormatException ex) {
+            targetResidentsValue = 2.0; // Fallback
+        }
+
+        String currentHouseNum = houseNumField.getText();
         try {
             int num = Integer.parseInt(currentHouseNum);
-            int inc = Integer.parseInt(currentIncStr);
+            int inc = Integer.parseInt(lastIncrement);
             lastHouseNumber = String.valueOf(num + inc);
         } catch (NumberFormatException ex) {
             lastHouseNumber = currentHouseNum;
@@ -127,7 +135,6 @@ public class GenerateTagsAction extends JosmAction {
         ds.beginUpdate();
         try {
             for (OsmPrimitive osm : selection) {
-                // IMPORTANT: Only apply tags to things that AREN'T the road we selected
                 if (osm instanceof Way && osm.hasTag("highway")) continue;
 
                 if (!lastCity.isEmpty()) osm.put("addr:city", lastCity);
@@ -140,7 +147,7 @@ public class GenerateTagsAction extends JosmAction {
 
                 String selectedType = (String) typeCombo.getSelectedItem();
                 if ("House".equals(selectedType)) {
-                    applyHouseLogic(osm);
+                    applyHouseLogic(osm, targetResidentsValue);
                 } else {
                     applyBusinessLogic(osm, selectedType.toLowerCase());
                 }
@@ -150,16 +157,45 @@ public class GenerateTagsAction extends JosmAction {
         }
     }
 
-    private void applyHouseLogic(OsmPrimitive osm) {
+    private void applyHouseLogic(OsmPrimitive osm, double target) {
         int levels = (RANDOM.nextDouble() < 0.7) ? 1 : 2;
         double height = (levels == 1) ? 3.0 + (RANDOM.nextDouble() * 1.5) : 5.5 + (RANDOM.nextDouble() * 2.0);
         osm.put("building", "house");
         osm.put("building:levels", String.valueOf(levels));
         osm.put("height", String.format("%.1f", height));
-        double r = RANDOM.nextDouble();
-        int res = (r < 0.2) ? 1 : (r < 0.6) ? 2 : (r < 0.85) ? 3 : (r < 0.95) ? 4 : 5;
+
+        // Use Poisson-like distribution for the weighted target
+        int res = getWeightedResidents(target);
+
         osm.put("building:residents", String.valueOf(res));
         osm.remove("employees"); osm.remove("ms:ccode"); osm.remove("name");
+    }
+
+    /**
+     * Generates a random number of residents based on a target average.
+     */
+    private int getWeightedResidents(double target) {
+        // Knuth's algorithm for Poisson distribution
+        double L = Math.exp(-target);
+        int k = 0;
+        double p = 1.0;
+        do {
+            k++;
+            p *= RANDOM.nextDouble();
+        } while (p > L);
+
+        int result = k - 1;
+
+        // Ensure we don't return 0 (every house needs at least 1 person)
+        if (result < 1) result = 1;
+
+        // Apply your 10+ logic: if it picks a high number,
+        // randomize it between 10 and 20.
+        if (result >= 10) {
+            result = 10 + RANDOM.nextInt(11); // 10 to 20
+        }
+
+        return result;
     }
 
     private void applyBusinessLogic(OsmPrimitive osm, String type) {
