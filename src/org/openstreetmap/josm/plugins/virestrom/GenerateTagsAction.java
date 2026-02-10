@@ -15,6 +15,7 @@ import org.openstreetmap.josm.gui.MainApplication;
 import org.openstreetmap.josm.gui.ExtendedDialog;
 import org.openstreetmap.josm.tools.Shortcut;
 import org.openstreetmap.josm.spi.preferences.Config;
+import org.openstreetmap.josm.tools.Geometry;
 
 public class GenerateTagsAction extends JosmAction {
 
@@ -26,7 +27,9 @@ public class GenerateTagsAction extends JosmAction {
     private static String lastStreet = "";
     private static String lastHouseNumber = "";
     private static String lastIncrement = "1";
-    private static String lastTargetRes = "2.5"; // Default target average
+    private static String lastTargetRes = "2.5";
+    private static String lastLevels = "3";
+    private static String lastUnitSize = "75";
     private static int lastTypeIndex = 0;
 
     public GenerateTagsAction() {
@@ -62,7 +65,7 @@ public class GenerateTagsAction extends JosmAction {
         }
 
         // UI Components
-        String[] types = {"House", "Industrial", "Commercial"};
+        String[] types = {"House", "Industrial", "Commercial", "Apartments"};
         JComboBox<String> typeCombo = new JComboBox<>(types);
         typeCombo.setSelectedIndex(lastTypeIndex);
 
@@ -71,7 +74,9 @@ public class GenerateTagsAction extends JosmAction {
         JTextField streetField = new JTextField(detectedStreet, 20);
         JTextField houseNumField = new JTextField(lastHouseNumber, 20);
         JTextField incrementField = new JTextField(lastIncrement, 20);
-        JTextField targetResField = new JTextField(lastTargetRes, 20); // NEW FIELD
+        JTextField targetResField = new JTextField(lastTargetRes, 20);
+        JTextField levelsField = new JTextField(lastLevels, 20);
+        JTextField unitSizeField = new JTextField(lastUnitSize, 20);
 
         JTextField countryField = new JTextField(Config.getPref().get("virestrom.country", "FSA"), 20);
         JTextField stateField = new JTextField(Config.getPref().get("virestrom.state", "MS"), 20);
@@ -80,7 +85,9 @@ public class GenerateTagsAction extends JosmAction {
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
         panel.add(new JLabel("Building Type:")); panel.add(typeCombo);
-        panel.add(new JLabel("Target Residents:")); panel.add(targetResField); // Added to UI
+        panel.add(new JLabel("Target Residents")); panel.add(targetResField);
+        panel.add(new JLabel("Levels (Apts only):")); panel.add(levelsField);
+        panel.add(new JLabel("Unit Size m² (Apts only):")); panel.add(unitSizeField);
         panel.add(new JLabel("City:")); panel.add(cityField);
         panel.add(new JLabel("Postcode:")); panel.add(postField);
         panel.add(new JLabel("Street:")); panel.add(streetField);
@@ -112,13 +119,12 @@ public class GenerateTagsAction extends JosmAction {
         lastStreet = streetField.getText();
         lastIncrement = incrementField.getText();
         lastTargetRes = targetResField.getText();
+        lastLevels = levelsField.getText();
+        lastUnitSize = unitSizeField.getText();
 
-        double targetResidentsValue;
-        try {
-            targetResidentsValue = Double.parseDouble(lastTargetRes);
-        } catch (NumberFormatException ex) {
-            targetResidentsValue = 2.0; // Fallback
-        }
+        double targetResidentsValue = parseDouble(lastTargetRes, 2.5);
+        int levelsValue = (int) parseDouble(lastLevels, 1.0);
+        double unitSizeValue = parseDouble(lastUnitSize, 75.0);
 
         String currentHouseNum = houseNumField.getText();
         try {
@@ -148,6 +154,8 @@ public class GenerateTagsAction extends JosmAction {
                 String selectedType = (String) typeCombo.getSelectedItem();
                 if ("House".equals(selectedType)) {
                     applyHouseLogic(osm, targetResidentsValue);
+                } else if ("Apartments".equals(selectedType)) {
+                    applyApartmentLogic(osm, levelsValue, unitSizeValue, targetResidentsValue);
                 } else {
                     applyBusinessLogic(osm, selectedType.toLowerCase());
                 }
@@ -157,6 +165,35 @@ public class GenerateTagsAction extends JosmAction {
         }
     }
 
+    private void applyApartmentLogic(OsmPrimitive osm, int levels, double unitSize, double targetResPerUnit) {
+        double area = 0;
+        if (osm instanceof Way) {
+            area = Geometry.computeArea((Way) osm);
+        }
+
+        // Calculate units based on total floor area
+        double totalFloorArea = area * levels;
+        int units = (int) Math.max(1, Math.round(totalFloorArea / unitSize));
+
+        // Sum residents across all units using your existing weighted logic
+        int totalResidents = 0;
+        for (int i = 0; i < units; i++) {
+            totalResidents += getWeightedResidents(targetResPerUnit);
+        }
+
+        // Height: ~3.5m per level + random variation
+        double height = (levels * 3.5) + (RANDOM.nextDouble() * 2.0);
+
+        osm.put("building", "apartments");
+        osm.put("building:levels", String.valueOf(levels));
+        osm.put("building:units", String.valueOf(units));
+        osm.put("building:residents", String.valueOf(totalResidents));
+        osm.put("height", String.format("%.1f", height));
+
+        // Clean up business tags if they existed
+        osm.remove("employees"); osm.remove("ms:ccode");
+    }
+
     private void applyHouseLogic(OsmPrimitive osm, double target) {
         int levels = (RANDOM.nextDouble() < 0.7) ? 1 : 2;
         double height = (levels == 1) ? 3.0 + (RANDOM.nextDouble() * 1.5) : 5.5 + (RANDOM.nextDouble() * 2.0);
@@ -164,18 +201,13 @@ public class GenerateTagsAction extends JosmAction {
         osm.put("building:levels", String.valueOf(levels));
         osm.put("height", String.format("%.1f", height));
 
-        // Use Poisson-like distribution for the weighted target
         int res = getWeightedResidents(target);
-
         osm.put("building:residents", String.valueOf(res));
         osm.remove("employees"); osm.remove("ms:ccode"); osm.remove("name");
+        osm.remove("building:units");
     }
 
-    /**
-     * Generates a random number of residents based on a target average.
-     */
     private int getWeightedResidents(double target) {
-        // Knuth's algorithm for Poisson distribution
         double L = Math.exp(-target);
         int k = 0;
         double p = 1.0;
@@ -185,16 +217,10 @@ public class GenerateTagsAction extends JosmAction {
         } while (p > L);
 
         int result = k - 1;
-
-        // Ensure we don't return 0 (every house needs at least 1 person)
         if (result < 1) result = 1;
-
-        // Apply your 10+ logic: if it picks a high number,
-        // randomize it between 10 and 20.
         if (result >= 10) {
-            result = 10 + RANDOM.nextInt(11); // 10 to 20
+            result = 10 + RANDOM.nextInt(11);
         }
-
         return result;
     }
 
@@ -207,5 +233,14 @@ public class GenerateTagsAction extends JosmAction {
         osm.put("ms:ccode", "xx-xxxxx");
         osm.put("name", "xxx");
         osm.remove("building:residents");
+        osm.remove("building:units");
+    }
+
+    private double parseDouble(String val, double fallback) {
+        try {
+            return Double.parseDouble(val);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 }
