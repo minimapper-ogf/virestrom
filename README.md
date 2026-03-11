@@ -10,14 +10,14 @@ All features can be found in tools.
 
 ### Building Tagging
 With a area seclected, you can use Create Building Tags or CTRL+SHIFT+X and a popup will appear.
-From the popup you can choose building type and its address. The rest of the values such as height, floor count, residents (for houses), employees (for commercial and industrial), and ms:ccode (for commercial and industrial) are added in the background after applying changes. With v1.2.0 you can now choose to increment the address value by a number (you can also start from a number and count down) and you can also seclect a road way that contains a name= tag and it will apply the name tag to the road address automatically.
+From the popup you can choose things such as building type, the target number of residents you want (picks a random value around your target and with more buildings the closer the average), and address. For apartments you can choose unit size and floor count and it does the math to how many units there are and how many people live in the building using the targer residents.
 
 ### Admin Level Tagging
 With a area seclected (or group of ways to make an area seclected), you can use Create Admin Bound Tags or ALT+SHIFT+Q
 From the popup you can choose name, population, admin level, what county its in, and what state its in. Admin level and what county its in are saved during the session to save filling out fields. Is_in:state saves acrost sessions.
 
 #### Extra Notes
-Admin Level Tagging still does not handle inside ways. This might be added later on if it becomes enough of an issue but for now that has to be done manually
+Admin Level Tagging still does not handle inside ways. I wanted it just to ease my area tagging process not for the relation building which I am better doing manually.
 
 ## Installation
 Download the .jar file in releases and navigate it to your JOSM plugins folder. Info on where your plugins folder is can be found [here](https://wiki.openstreetmap.org/wiki/JOSM/Plugins#Manually_install_JOSM_plugins).
