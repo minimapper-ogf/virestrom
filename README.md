@@ -1,5 +1,6 @@
 # Virestrom
 Virestrom is a simple tagging tool desgined for OGF:Mishota
+More documentation can be found [here](https://minimapper.net/docs/virestrom.html)
 
 ## Features
 Features include: 
