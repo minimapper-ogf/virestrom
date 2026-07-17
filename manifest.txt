@@ -2,7 +2,7 @@ Manifest-Version: 1.0
 Plugin-Name: Virestrom
 Plugin-Class: org.openstreetmap.josm.plugins.virestrom.VirestromPlugin
 Plugin-Description: Minimappers OGF Suite for Mishota
-Plugin-Version: 3.0.0
+Plugin-Version: 4.0.0
 Plugin-Author: minimapper
 Plugin-Link: https://minimapper.net
 Plugin-Mainversion: 19000
