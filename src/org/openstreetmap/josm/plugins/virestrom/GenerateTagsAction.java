@@ -4,9 +4,6 @@ import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.util.*;
 import javax.swing.*;
-import java.awt.GridLayout;
-import java.awt.Color;
-import java.awt.FlowLayout;
 
 import org.openstreetmap.josm.actions.JosmAction;
 import org.openstreetmap.josm.data.osm.OsmPrimitive;
@@ -17,11 +14,13 @@ import org.openstreetmap.josm.tools.Shortcut;
 import org.openstreetmap.josm.spi.preferences.Config;
 import org.openstreetmap.josm.tools.Geometry;
 import org.openstreetmap.josm.tools.OpenBrowser;
+import java.awt.FlowLayout;
+import java.awt.GridLayout;
 
 public class GenerateTagsAction extends JosmAction {
 
     private static final Random RANDOM = new Random();
-    private static final String DOC_URL = "https://minimapper.net";
+    private static final String DOC_URL = "https://minimapper.net/docs/virestrom.html";
 
     private static String lastCity = "";
     private static String lastPostcode = "";
@@ -60,7 +59,6 @@ public class GenerateTagsAction extends JosmAction {
             }
         }
 
-        // UI setup remains the same
         String[] types = {"House", "Industrial", "Commercial", "Apartments"};
         JComboBox<String> typeCombo = new JComboBox<>(types);
         typeCombo.setSelectedIndex(lastTypeIndex);
@@ -161,7 +159,6 @@ public class GenerateTagsAction extends JosmAction {
 
     private int getWeightedValue(String input, boolean shouldRandomize) {
         String raw = input.toLowerCase();
-        // Extract the target (first number in the string)
         double target = parseDouble(raw.split("\\s+")[0], 1.0);
 
         if (!shouldRandomize) return (int) Math.round(target);
@@ -170,7 +167,6 @@ public class GenerateTagsAction extends JosmAction {
         double aboveLimit = Double.MAX_VALUE;
         double belowLimit = -Double.MAX_VALUE;
 
-        // Parse Logic
         if (raw.contains("never")) {
             String part = raw.split("never")[1].split("above|below")[0];
             for (String s : part.split(",")) forbidden.add((int) parseDouble(s.trim(), -1.0));
@@ -187,7 +183,6 @@ public class GenerateTagsAction extends JosmAction {
         do {
             picked = calculatePoisson(target);
             attempts++;
-            // Break loop if we are stuck to avoid freezing JOSM
             if (attempts > 100) break;
         } while (forbidden.contains(picked) || picked > aboveLimit || picked < belowLimit);
 
@@ -201,7 +196,6 @@ public class GenerateTagsAction extends JosmAction {
         do { k++; p *= RANDOM.nextDouble(); } while (p > L);
         int result = k - 1;
         if (result < 1) result = 1;
-        // Poisson naturally has a "long tail", this keeps things somewhat sane if target is high
         if (result >= 15) result = 15 + RANDOM.nextInt(6);
         return result;
     }
