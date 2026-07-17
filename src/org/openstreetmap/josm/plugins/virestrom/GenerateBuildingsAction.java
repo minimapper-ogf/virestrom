@@ -367,21 +367,24 @@ public class GenerateBuildingsAction extends JosmAction {
                         for (String side : sidesToGenerate) {
                             double sharedSetbackDist = targetSetbackMinMeters + rand.nextDouble() * (targetSetbackMaxMeters - targetSetbackMinMeters);
 
+                            // Calculate structural road angle at start of block to prevent wavy/overlapping staircasing
+                            RoadPoint rowStartPt = getPointAtDistance(road, currentDist + (rowHouseWidth / 2.0), cumDist);
+                            double continuousAngle = rowStartPt.angle;
+
+                            double perpAngle = "Left".equals(side) ? continuousAngle + Math.PI / 2.0 : continuousAngle - Math.PI / 2.0;
+                            double metersPerDegreeLat = 111000.0;
+                            double metersPerDegreeLon = metersPerDegreeLat * Math.cos(Math.toRadians(rowStartPt.pt.lat()));
+
+                            // Continuous Vector-Based Placement
                             for (int u = 0; u < numUnits; u++) {
-                                double unitCenterDist = currentDist + (u * rowHouseWidth) + (rowHouseWidth / 2.0);
-                                RoadPoint roadPt = getPointAtDistance(road, unitCenterDist, cumDist);
+                                double offsetAlongRow = (u - (numUnits - 1) / 2.0) * rowHouseWidth;
 
-                                double perpAngle = "Left".equals(side) ? roadPt.angle + Math.PI / 2.0 : roadPt.angle - Math.PI / 2.0;
+                                double centerLatOffset = (sharedSetbackDist * Math.sin(perpAngle) + offsetAlongRow * Math.sin(continuousAngle)) / metersPerDegreeLat;
+                                double centerLonOffset = (sharedSetbackDist * Math.cos(perpAngle) + offsetAlongRow * Math.cos(continuousAngle)) / metersPerDegreeLon;
 
-                                double metersPerDegreeLat = 111000.0;
-                                double metersPerDegreeLon = metersPerDegreeLat * Math.cos(Math.toRadians(roadPt.pt.lat()));
+                                LatLon buildingCenter = new LatLon(rowStartPt.pt.lat() + centerLatOffset, rowStartPt.pt.lon() + centerLonOffset);
 
-                                double offsetLat = (sharedSetbackDist * Math.sin(perpAngle)) / metersPerDegreeLat;
-                                double offsetLon = (sharedSetbackDist * Math.cos(perpAngle)) / metersPerDegreeLon;
-
-                                LatLon buildingCenter = new LatLon(roadPt.pt.lat() + offsetLat, roadPt.pt.lon() + offsetLon);
-
-                                List<Node> buildingNodes = createTransitionZoneNodes(buildingCenter, targetAreaMeters, roadPt.angle, rowStyleForThisBlock, rand);
+                                List<Node> buildingNodes = createTransitionZoneNodes(buildingCenter, targetAreaMeters, continuousAngle, rowStyleForThisBlock, rand);
                                 if (buildingNodes.size() < 3) continue;
 
                                 Way buildingWay = new Way();
@@ -676,13 +679,14 @@ public class GenerateBuildingsAction extends JosmAction {
         double sinR = Math.sin(houseHeading);
 
         for (Point2D pt : perimeter) {
-            double degX = pt.x / metersPerDegreeLon;
-            double degY = pt.y / metersPerDegreeLat;
+            // ROTATE IN METERS FIRST TO AVOID SKEWING AT AWKWARD ROTATION ANGLES
+            double rotatedX = pt.x * cosR - pt.y * sinR;
+            double rotatedY = pt.x * sinR + pt.y * cosR;
 
-            double rotatedLon = degX * cosR - degY * sinR;
-            double rotatedLat = degX * sinR + degY * cosR;
+            double degLon = rotatedX / metersPerDegreeLon;
+            double degLat = rotatedY / metersPerDegreeLat;
 
-            Node shedNode = new Node(new LatLon(shedCenter.lat() + rotatedLat, shedCenter.lon() + rotatedLon));
+            Node shedNode = new Node(new LatLon(shedCenter.lat() + degLat, shedCenter.lon() + degLon));
             commands.add(new AddCommand(dataSet, shedNode));
             shedNodes.add(shedNode);
         }
@@ -1000,13 +1004,14 @@ public class GenerateBuildingsAction extends JosmAction {
         double sinR = Math.sin(headingRotation);
 
         for (Point2D pt : perimeter) {
-            double degX = pt.x / metersPerDegreeLon;
-            double degY = pt.y / metersPerDegreeLat;
+            // ROTATE IN METERS FIRST TO PREVENT ROTATIONAL WARPING AND SKEWING
+            double rotatedX = pt.x * cosR - pt.y * sinR;
+            double rotatedY = pt.x * sinR + pt.y * cosR;
 
-            double rotatedLon = degX * cosR - degY * sinR;
-            double rotatedLat = degX * sinR + degY * cosR;
+            double degLon = rotatedX / metersPerDegreeLon;
+            double degLat = rotatedY / metersPerDegreeLat;
 
-            nodes.add(new Node(new LatLon(center.lat() + rotatedLat, center.lon() + rotatedLon)));
+            nodes.add(new Node(new LatLon(center.lat() + degLat, center.lon() + degLon)));
         }
 
         return nodes;
