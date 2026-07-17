@@ -60,10 +60,13 @@ public class GenerateBuildingsAction extends JosmAction {
     private static boolean lastUseLongSide = false;
     private static boolean lastUseSquare = false;
     
-    // Checkbox states for three row house profiles
     private static boolean lastUseRowStandard = false;
     private static boolean lastUseRowSquare = false;
     private static boolean lastUseRowDeep = false;
+
+    // New persistent toggle states
+    private static boolean lastGenerateDriveways = false;
+    private static boolean lastGenerateSheds = false;
 
     public GenerateBuildingsAction() {
         super("Generate Buildings", "building", "Generates procedural buildings inside selected areas or along roads",
@@ -97,8 +100,8 @@ public class GenerateBuildingsAction extends JosmAction {
             return;
         }
 
-        // Expanded UI Layout to fit all variations
-        JPanel panel = new JPanel(new GridLayout(14, 2, 5, 5));
+        // Expanded UI Layout to fit Driveway and Shed config
+        JPanel panel = new JPanel(new GridLayout(16, 2, 5, 5));
         JTextField sizeField = new JTextField(lastSizeValue);
         
         JTextField setbackMinField = new JTextField(lastSetbackMin, 5);
@@ -132,6 +135,9 @@ public class GenerateBuildingsAction extends JosmAction {
         JCheckBox rowSquareCheck = new JCheckBox("Row House - Square", lastUseRowSquare);
         JCheckBox rowDeepCheck = new JCheckBox("Row House - Deep", lastUseRowDeep);
 
+        JCheckBox drivewayCheck = new JCheckBox("Generate Driveways", lastGenerateDriveways);
+        JCheckBox shedCheck = new JCheckBox("Generate Sheds in Back", lastGenerateSheds);
+
         // Helper event to check if any row house types are currently active
         Runnable updateInteractiveFields = () -> {
             boolean rowActive = rowStandardCheck.isSelected() || rowSquareCheck.isSelected() || rowDeepCheck.isSelected();
@@ -142,6 +148,10 @@ public class GenerateBuildingsAction extends JosmAction {
                 rotationField.setText("0.0");
                 spacingMinField.setEnabled(false);
                 spacingMaxField.setEnabled(false);
+                drivewayCheck.setEnabled(false);
+                drivewayCheck.setSelected(false);
+                shedCheck.setEnabled(false);
+                shedCheck.setSelected(false);
                 
                 // Clear out independent building shapes
                 shortSideCheck.setSelected(false);
@@ -152,6 +162,8 @@ public class GenerateBuildingsAction extends JosmAction {
                 rotationField.setText(lastRotationLimit);
                 spacingMinField.setEnabled(roadOnly);
                 spacingMaxField.setEnabled(roadOnly);
+                drivewayCheck.setEnabled(true);
+                shedCheck.setEnabled(true);
             }
         };
 
@@ -201,6 +213,10 @@ public class GenerateBuildingsAction extends JosmAction {
         panel.add(rowSquareCheck);
         panel.add(new JLabel(""));
         panel.add(rowDeepCheck);
+        panel.add(new JLabel("Add-ons (Independent Only):"));
+        panel.add(drivewayCheck);
+        panel.add(new JLabel(""));
+        panel.add(shedCheck);
 
         int result = JOptionPane.showConfirmDialog(MainApplication.getMainFrame(), panel,
                 "Generate Buildings Configuration", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
@@ -225,6 +241,9 @@ public class GenerateBuildingsAction extends JosmAction {
         lastUseRowStandard = rowStandardCheck.isSelected();
         lastUseRowSquare = rowSquareCheck.isSelected();
         lastUseRowDeep = rowDeepCheck.isSelected();
+
+        lastGenerateDriveways = drivewayCheck.isSelected();
+        lastGenerateSheds = shedCheck.isSelected();
 
         double targetAreaMeters;
         double targetSetbackMinMeters;
@@ -315,7 +334,6 @@ public class GenerateBuildingsAction extends JosmAction {
                 while (currentDist < totalRoadLength) {
                     
                     if (isRowMode) {
-                        // 1. Pick exactly ONE Row House style at random to keep this entire block uniform
                         String rowStyleForThisBlock = activeRowStyles.get(rand.nextInt(activeRowStyles.size()));
                         
                         double activeMinRatio;
@@ -329,7 +347,6 @@ public class GenerateBuildingsAction extends JosmAction {
 
                         double rowHouseWidth = Math.sqrt(targetAreaMeters / activeMinRatio);
                         
-                        // Decide how many homes fit in this row
                         int numUnits = 4 + rand.nextInt(5); 
                         double totalRowLengthNeeded = rowHouseWidth * numUnits;
 
@@ -437,6 +454,16 @@ public class GenerateBuildingsAction extends JosmAction {
                             buildingWay.addNode(buildingNodes.get(0));
                             buildingWay.put("tobetagged", "yes");
                             commands.add(new AddCommand(dataSet, buildingWay));
+
+                            // Optional Addon: Procedural Driveway
+                            if (lastGenerateDriveways) {
+                                generateDriveway(dataSet, commands, roadPt.pt, buildingCenter, finalHeading, buildingWidth, setbackDist, rand);
+                            }
+
+                            // Optional Addon: Procedural Backyard Shed
+                            if (lastGenerateSheds) {
+                                generateBackyardShed(dataSet, commands, buildingCenter, finalHeading, perpAngle, rand);
+                            }
                         }
 
                         double gap = spacingMinMeters + rand.nextDouble() * (spacingMaxMeters - spacingMinMeters);
@@ -471,6 +498,7 @@ public class GenerateBuildingsAction extends JosmAction {
 
                 if (buildingNodes.size() < 3) continue;
 
+                double finalSetback = 0.0;
                 if (lastAlignToRoad && !roads.isEmpty()) {
                     LatLon shiftVector = calculateControlledSetbackShift(center, roads, targetSetbackMinMeters, targetSetbackMaxMeters, rand);
                     for (Node node : buildingNodes) {
@@ -478,6 +506,10 @@ public class GenerateBuildingsAction extends JosmAction {
                         double newLon = node.getCoor().lon() + shiftVector.lon();
                         node.setCoor(new LatLon(newLat, newLon));
                     }
+                    
+                    // Recompute precise shifted center
+                    center = getCentroidOfNodes(buildingNodes);
+                    finalSetback = getDistanceToNearestRoad(center, roads);
                 }
 
                 Way buildingWay = new Way();
@@ -488,11 +520,241 @@ public class GenerateBuildingsAction extends JosmAction {
                 buildingWay.addNode(buildingNodes.get(0));
                 buildingWay.put("tobetagged", "yes");
                 commands.add(new AddCommand(dataSet, buildingWay));
+
+                if (!isRowMode && lastGenerateDriveways && !roads.isEmpty()) {
+                    LatLon nearestRoadPt = getNearestRoadPoint(center, roads);
+                    double buildingWidthEstimated = Math.sqrt(currentTargetArea);
+                    generateDriveway(dataSet, commands, nearestRoadPt, center, headingRotation, buildingWidthEstimated, finalSetback, rand);
+                }
+
+                if (!isRowMode && lastGenerateSheds && !roads.isEmpty()) {
+                    double roadAngle = calculateRoadAngle(center, roads);
+                    // Determine setback direction vector pointing away from nearest road
+                    LatLon nearestRoadPt = getNearestRoadPoint(center, roads);
+                    double dLat = center.lat() - nearestRoadPt.lat();
+                    double dLon = center.lon() - nearestRoadPt.lon();
+                    double perpAngle = Math.atan2(dLat, dLon);
+                    generateBackyardShed(dataSet, commands, center, headingRotation, perpAngle, rand);
+                }
             }
         }
 
         UndoRedoHandler.getInstance().add(new SequenceCommand("Generate Buildings", commands));
         dataSet.setSelected(selection);
+    }
+
+    // ==========================================
+    //   PROCEDURAL ADD-ON GENERATOR ENGINE
+    // ==========================================
+
+    private void generateDriveway(DataSet dataSet, List<Command> commands, LatLon roadPt, LatLon houseCenter, double houseHeading, double houseWidth, double setbackMeters, Random rand) {
+        if (setbackMeters <= 2.0) return; // Too close to road to make a realistic driveway
+
+        double metersPerDegreeLat = 111000.0;
+        double metersPerDegreeLon = metersPerDegreeLat * Math.cos(Math.toRadians(houseCenter.lat()));
+
+        // Offset the parking spot to either the left or right side of the home
+        boolean parkOnLeft = rand.nextBoolean();
+        double sideOffsetDist = (houseWidth / 2.0) + (1.5 + rand.nextDouble() * 2.0); // 1.5 - 3.5 meters side clearance
+        if (parkOnLeft) sideOffsetDist = -sideOffsetDist;
+
+        // Perpendicular offset angle from house heading
+        double perpOffsetAngle = houseHeading + Math.PI / 2.0;
+
+        double offsetLat = (sideOffsetDist * Math.sin(perpOffsetAngle)) / metersPerDegreeLat;
+        double offsetLon = (sideOffsetDist * Math.cos(perpOffsetAngle)) / metersPerDegreeLon;
+
+        // Terminal parking pad node coordinates next to house
+        LatLon drivewayEnd = new LatLon(houseCenter.lat() + offsetLat, houseCenter.lon() + offsetLon);
+
+        List<Node> drivewayNodes = new ArrayList<>();
+        
+        // Start node on the public street
+        Node startNode = new Node(roadPt);
+        commands.add(new AddCommand(dataSet, startNode));
+        drivewayNodes.add(startNode);
+
+        double lengthFeet = setbackMeters / 0.3048;
+
+        if (lengthFeet > 70.0) {
+            // SPECIAL HIGH-FIDELITY SHAPE: Multi-node curved estate driveway
+            int numInterNodes = 4 + rand.nextInt(4); // 4 to 7 intermediate winding nodes
+            
+            // Random sway strength factor
+            double curvatureStrength = 3.0 + rand.nextDouble() * 6.0; 
+            boolean curveDirection = rand.nextBoolean();
+
+            for (int i = 1; i < numInterNodes; i++) {
+                double t = (double) i / numInterNodes;
+                
+                // Linear step position
+                double interpLat = roadPt.lat() + t * (drivewayEnd.lat() - roadPt.lat());
+                double interpLon = roadPt.lon() + t * (drivewayEnd.lon() - roadPt.lon());
+
+                // Apply organic S-curve offset perpendicular to trajectory
+                double sineWave = Math.sin(t * Math.PI);
+                double offsetAmount = sineWave * curvatureStrength;
+                if (!curveDirection) offsetAmount = -offsetAmount;
+
+                double swayAngle = Math.atan2(drivewayEnd.lat() - roadPt.lat(), drivewayEnd.lon() - roadPt.lon()) + Math.PI / 2.0;
+                
+                double swayLat = (offsetAmount * Math.sin(swayAngle)) / metersPerDegreeLat;
+                double swayLon = (offsetAmount * Math.cos(swayAngle)) / metersPerDegreeLon;
+
+                Node interNode = new Node(new LatLon(interpLat + swayLat, interpLon + swayLon));
+                commands.add(new AddCommand(dataSet, interNode));
+                drivewayNodes.add(interNode);
+            }
+        } else {
+            // STANDARD SHORT DRIVEWAY: 2-3 nodes (Straight, or single angled elbow)
+            if (rand.nextBoolean()) {
+                // Add an intermediate node to make a nice elbow bend
+                double interpLat = roadPt.lat() + 0.5 * (drivewayEnd.lat() - roadPt.lat());
+                double interpLon = roadPt.lon() + 0.5 * (drivewayEnd.lon() - roadPt.lon());
+                
+                // Slight random wiggle offset
+                double wiggleDist = (rand.nextDouble() * 2.0 - 1.0);
+                double wiggleAngle = perpOffsetAngle;
+                
+                double wiggleLat = (wiggleDist * Math.sin(wiggleAngle)) / metersPerDegreeLat;
+                double wiggleLon = (wiggleDist * Math.cos(wiggleAngle)) / metersPerDegreeLon;
+
+                Node elbowNode = new Node(new LatLon(interpLat + wiggleLat, interpLon + wiggleLon));
+                commands.add(new AddCommand(dataSet, elbowNode));
+                drivewayNodes.add(elbowNode);
+            }
+        }
+
+        // Terminal node
+        Node endNode = new Node(drivewayEnd);
+        commands.add(new AddCommand(dataSet, endNode));
+        drivewayNodes.add(endNode);
+
+        Way drivewayWay = new Way();
+        for (Node n : drivewayNodes) {
+            drivewayWay.addNode(n);
+        }
+
+        // Apply standardized OpenStreetMap tags for driveways
+        drivewayWay.put("highway", "service");
+        drivewayWay.put("lanes", "1");
+        drivewayWay.put("service", "driveway");
+        drivewayWay.put("width", "4");
+
+        commands.add(new AddCommand(dataSet, drivewayWay));
+    }
+
+    private void generateBackyardShed(DataSet dataSet, List<Command> commands, LatLon houseCenter, double houseHeading, double setbackPerpAngle, Random rand) {
+        double metersPerDegreeLat = 111000.0;
+        double metersPerDegreeLon = metersPerDegreeLat * Math.cos(Math.toRadians(houseCenter.lat()));
+
+        // Offset the shed behind the house (further down the road-setback vector)
+        double yardDepthOffset = 10.0 + rand.nextDouble() * 12.0; // 10 to 22 meters deep in the yard
+        double sideYardWiggle = (rand.nextDouble() * 2.0 - 1.0) * 4.0; // Side adjustment inside yard
+
+        double backyardLat = (yardDepthOffset * Math.sin(setbackPerpAngle) + sideYardWiggle * Math.sin(setbackPerpAngle + Math.PI/2.0)) / metersPerDegreeLat;
+        double backyardLon = (yardDepthOffset * Math.cos(setbackPerpAngle) + sideYardWiggle * Math.cos(setbackPerpAngle + Math.PI/2.0)) / metersPerDegreeLon;
+
+        LatLon shedCenter = new LatLon(houseCenter.lat() + backyardLat, houseCenter.lon() + backyardLon);
+
+        // Typical small backyard utility shed sizes: 8x10ft (~2.4x3m) up to 12x14ft (~3.6x4.2m)
+        double shedWidth = (8.0 + rand.nextDouble() * 4.0) * 0.3048;
+        double shedHeight = (10.0 + rand.nextDouble() * 4.0) * 0.3048;
+
+        double halfW = shedWidth / 2.0;
+        double halfH = shedHeight / 2.0;
+
+        // Base rectangular footprints
+        List<Point2D> perimeter = new ArrayList<>();
+        perimeter.add(new Point2D(-halfW, -halfH));
+        perimeter.add(new Point2D(halfW, -halfH));
+        perimeter.add(new Point2D(halfW, halfH));
+        perimeter.add(new Point2D(-halfW, halfH));
+
+        List<Node> shedNodes = new ArrayList<>();
+        double cosR = Math.cos(houseHeading);
+        double sinR = Math.sin(houseHeading);
+
+        for (Point2D pt : perimeter) {
+            double degX = pt.x / metersPerDegreeLon;
+            double degY = pt.y / metersPerDegreeLat;
+
+            double rotatedLon = degX * cosR - degY * sinR;
+            double rotatedLat = degX * sinR + degY * cosR;
+
+            Node shedNode = new Node(new LatLon(shedCenter.lat() + rotatedLat, shedCenter.lon() + rotatedLon));
+            commands.add(new AddCommand(dataSet, shedNode));
+            shedNodes.add(shedNode);
+        }
+
+        Way shedWay = new Way();
+        for (Node n : shedNodes) {
+            shedWay.addNode(n);
+        }
+        shedWay.addNode(shedNodes.get(0)); // Close way
+        shedWay.put("building", "shed");
+
+        commands.add(new AddCommand(dataSet, shedWay));
+    }
+
+    // ==========================================
+    //   ADDITIONAL MATH & DISTANCE HELPERS
+    // ==========================================
+
+    private LatLon getCentroidOfNodes(List<Node> nodes) {
+        double lat = 0, lon = 0;
+        for (Node n : nodes) {
+            lat += n.getCoor().lat();
+            lon += n.getCoor().lon();
+        }
+        return new LatLon(lat / nodes.size(), lon / nodes.size());
+    }
+
+    private double getDistanceToNearestRoad(LatLon center, List<Way> roads) {
+        double closestDist = Double.MAX_VALUE;
+        for (Way road : roads) {
+            for (int i = 0; i < road.getNodesCount() - 1; i++) {
+                Node n1 = road.getNode(i);
+                Node n2 = road.getNode(i + 1);
+                double midLat = (n1.getCoor().lat() + n2.getCoor().lat()) / 2.0;
+                double midLon = (n1.getCoor().lon() + n2.getCoor().lon()) / 2.0;
+                double dist = center.greatCircleDistance(new LatLon(midLat, midLon));
+                if (dist < closestDist) closestDist = dist;
+            }
+        }
+        return closestDist;
+    }
+
+    private LatLon getNearestRoadPoint(LatLon center, List<Way> roads) {
+        double closestDist = Double.MAX_VALUE;
+        LatLon bestPt = null;
+
+        for (Way road : roads) {
+            for (int i = 0; i < road.getNodesCount() - 1; i++) {
+                Node n1 = road.getNode(i);
+                Node n2 = road.getNode(i + 1);
+                
+                double rx = n2.getCoor().lon() - n1.getCoor().lon();
+                double ry = n2.getCoor().lat() - n1.getCoor().lat();
+                double rLenSq = rx * rx + ry * ry;
+                if (rLenSq == 0) continue;
+
+                double tx = center.lon() - n1.getCoor().lon();
+                double ty = center.lat() - n1.getCoor().lat();
+                double t = Math.max(0, Math.min(1, (tx * rx + ty * ry) / rLenSq));
+
+                double closestLon = n1.getCoor().lon() + t * rx;
+                double closestLat = n1.getCoor().lat() + t * ry;
+                LatLon tempPt = new LatLon(closestLat, closestLon);
+
+                double dist = center.greatCircleDistance(tempPt);
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    bestPt = tempPt;
+                }
+            }
+        }
+        return (bestPt != null) ? bestPt : center;
     }
 
     private LatLon getCentroid(Way way) {
@@ -665,7 +927,6 @@ public class GenerateBuildingsAction extends JosmAction {
 
             int edgeIndex = rand.nextInt(perimeter.size());
             
-            // Shared wall restriction for Row Houses (only front/back cut allowed)
             if (isRowType) {
                 if (edgeIndex != 0 && edgeIndex != 2) {
                     continue; 
