@@ -319,6 +319,8 @@ public class GenerateBuildingsAction extends JosmAction {
             // ==========================================
             //  ROAD-ONLY GENERATION ENGINE
             // ==========================================
+            List<List<LatLon>> newlyCreatedPolygons = new ArrayList<>();
+
             for (Way road : roads) {
                 if (road.getNodesCount() < 2) continue;
 
@@ -387,14 +389,22 @@ public class GenerateBuildingsAction extends JosmAction {
                                 List<Node> buildingNodes = createTransitionZoneNodes(buildingCenter, targetAreaMeters, continuousAngle, rowStyleForThisBlock, rand);
                                 if (buildingNodes.size() < 3) continue;
 
+                                // Prevent overlaps against tagged elements & highway objects
+                                if (intersectsExistingObjects(buildingNodes, dataSet, newlyCreatedPolygons)) {
+                                    continue;
+                                }
+
                                 Way buildingWay = new Way();
+                                List<LatLon> currentPolyCoords = new ArrayList<>();
                                 for (Node node : buildingNodes) {
                                     commands.add(new AddCommand(dataSet, node));
                                     buildingWay.addNode(node);
+                                    currentPolyCoords.add(node.getCoor());
                                 }
                                 buildingWay.addNode(buildingNodes.get(0));
                                 buildingWay.put("tobetagged", "yes");
                                 commands.add(new AddCommand(dataSet, buildingWay));
+                                newlyCreatedPolygons.add(currentPolyCoords);
                             }
                         }
                         
@@ -449,14 +459,22 @@ public class GenerateBuildingsAction extends JosmAction {
                             List<Node> buildingNodes = createTransitionZoneNodes(buildingCenter, currentTargetArea, finalHeading, activeStyle, rand);
                             if (buildingNodes.size() < 3) continue;
 
+                            // Prevent overlaps against tagged elements & highway objects
+                            if (intersectsExistingObjects(buildingNodes, dataSet, newlyCreatedPolygons)) {
+                                continue;
+                            }
+
                             Way buildingWay = new Way();
+                            List<LatLon> currentPolyCoords = new ArrayList<>();
                             for (Node node : buildingNodes) {
                                 commands.add(new AddCommand(dataSet, node));
                                 buildingWay.addNode(node);
+                                currentPolyCoords.add(node.getCoor());
                             }
                             buildingWay.addNode(buildingNodes.get(0));
                             buildingWay.put("tobetagged", "yes");
                             commands.add(new AddCommand(dataSet, buildingWay));
+                            newlyCreatedPolygons.add(currentPolyCoords);
 
                             // Optional Addon: Procedural Driveway
                             if (lastGenerateDriveways) {
@@ -679,14 +697,13 @@ public class GenerateBuildingsAction extends JosmAction {
         double sinR = Math.sin(houseHeading);
 
         for (Point2D pt : perimeter) {
-            // ROTATE IN METERS FIRST TO AVOID SKEWING AT AWKWARD ROTATION ANGLES
-            double rotatedX = pt.x * cosR - pt.y * sinR;
-            double rotatedY = pt.x * sinR + pt.y * cosR;
+            double degX = pt.x / metersPerDegreeLon;
+            double degY = pt.y / metersPerDegreeLat;
 
-            double degLon = rotatedX / metersPerDegreeLon;
-            double degLat = rotatedY / metersPerDegreeLat;
+            double rotatedLon = degX * cosR - degY * sinR;
+            double rotatedLat = degX * sinR + degY * cosR;
 
-            Node shedNode = new Node(new LatLon(shedCenter.lat() + degLat, shedCenter.lon() + degLon));
+            Node shedNode = new Node(new LatLon(shedCenter.lat() + rotatedLat, shedCenter.lon() + rotatedLon));
             commands.add(new AddCommand(dataSet, shedNode));
             shedNodes.add(shedNode);
         }
@@ -699,6 +716,155 @@ public class GenerateBuildingsAction extends JosmAction {
         shedWay.put("building", "shed");
 
         commands.add(new AddCommand(dataSet, shedWay));
+    }
+
+    // ==========================================
+    //   COLLISION PREVENTATIVE MAPPING METHODS
+    // ==========================================
+
+    private boolean intersectsExistingObjects(List<Node> newBuildingNodes, DataSet dataSet, List<List<LatLon>> newlyCreatedPolygons) {
+        // Query database boundaries to inspect existing structures
+        for (Way way : dataSet.getWays()) {
+            if (way.hasKey("tobetagged") || way.hasKey("building") || way.hasKey("highway")) {
+                if (way.getNodesCount() < 2) continue;
+                List<LatLon> wayCoords = new ArrayList<>();
+                for (Node n : way.getNodes()) {
+                    wayCoords.add(n.getCoor());
+                }
+                if (intersectsWay(newBuildingNodes, wayCoords, way.isClosed())) {
+                    return true;
+                }
+            }
+        }
+        // Query the local array containing geometries created in this process session
+        for (List<LatLon> poly : newlyCreatedPolygons) {
+            if (intersectsWay(newBuildingNodes, poly, true)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean intersectsWay(List<Node> polyNodes, List<LatLon> wayCoords, boolean isClosed) {
+        // Perform an optimized quick-rejection Bounding Box Sweep Check
+        double minX1 = Double.MAX_VALUE, maxX1 = -Double.MAX_VALUE;
+        double minY1 = Double.MAX_VALUE, maxY1 = -Double.MAX_VALUE;
+        for (Node n : polyNodes) {
+            double x = n.getCoor().lon();
+            double y = n.getCoor().lat();
+            if (x < minX1) minX1 = x;
+            if (x > maxX1) maxX1 = x;
+            if (y < minY1) minY1 = y;
+            if (y > maxY1) maxY1 = y;
+        }
+        double minX2 = Double.MAX_VALUE, maxX2 = -Double.MAX_VALUE;
+        double minY2 = Double.MAX_VALUE, maxY2 = -Double.MAX_VALUE;
+        for (LatLon c : wayCoords) {
+            double x = c.lon();
+            double y = c.lat();
+            if (x < minX2) minX2 = x;
+            if (x > maxX2) maxX2 = x;
+            if (y < minY2) minY2 = y;
+            if (y > maxY2) maxY2 = y;
+        }
+        if (maxX1 < minX2 || maxX2 < minX1 || maxY1 < minY2 || maxY2 < minY1) {
+            return false;
+        }
+
+        // Direct Segment Intersection Evaluation
+        int n1 = polyNodes.size();
+        int n2 = wayCoords.size();
+        int segments2 = isClosed ? n2 : n2 - 1;
+
+        for (int i = 0; i < n1; i++) {
+            LatLon a1 = polyNodes.get(i).getCoor();
+            LatLon b1 = polyNodes.get((i + 1) % n1).getCoor();
+            for (int j = 0; j < segments2; j++) {
+                LatLon a2 = wayCoords.get(j);
+                LatLon b2 = wayCoords.get((j + 1) % n2);
+                if (segmentsIntersect(a1, b1, a2, b2)) {
+                    return true;
+                }
+            }
+        }
+
+        // Point-in-polygon containment checks
+        if (isClosed && n2 >= 3) {
+            if (isPointInPolygon(polyNodes.get(0).getCoor(), wayCoords)) {
+                return true;
+            }
+        }
+        for (LatLon c : wayCoords) {
+            if (isPointInPolygon(c, polyNodes)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private boolean segmentsIntersect(LatLon p1, LatLon q1, LatLon p2, LatLon q2) {
+        double o1 = ccw(p1, q1, p2);
+        double o2 = ccw(p1, q1, q2);
+        double o3 = ccw(p2, q2, p1);
+        double o4 = ccw(p2, q2, q1);
+
+        if (((o1 > 0 && o2 < 0) || (o1 < 0 && o2 > 0)) &&
+            ((o3 > 0 && o4 < 0) || (o3 < 0 && o4 > 0))) {
+            return true;
+        }
+
+        // Handle strict collinear cases
+        if (o1 == 0 && onSegment(p1, p2, q1)) return true;
+        if (o2 == 0 && onSegment(p1, q2, q1)) return true;
+        if (o3 == 0 && onSegment(p2, p1, q2)) return true;
+        if (o4 == 0 && onSegment(p2, q1, q2)) return true;
+
+        return false;
+    }
+
+    private double ccw(LatLon p, LatLon q, LatLon r) {
+        double val = (q.lat() - p.lat()) * (r.lon() - q.lon()) - (q.lon() - p.lon()) * (r.lat() - q.lat());
+        if (val == 0) return 0;
+        return (val > 0) ? 1 : -1;
+    }
+
+    private boolean onSegment(LatLon p, LatLon q, LatLon r) {
+        return q.lon() <= Math.max(p.lon(), r.lon()) && q.lon() >= Math.min(p.lon(), r.lon()) &&
+               q.lat() <= Math.max(p.lat(), r.lat()) && q.lat() >= Math.min(p.lat(), r.lat());
+    }
+
+    private boolean isPointInPolygon(LatLon pt, List<?> polygon) {
+        int numNodes = polygon.size();
+        if (numNodes < 3) return false;
+        boolean inside = false;
+        double px = pt.lon();
+        double py = pt.lat();
+        for (int i = 0, j = numNodes - 1; i < numNodes; j = i++) {
+            LatLon pi = getLatLonFromList(polygon, i);
+            LatLon pj = getLatLonFromList(polygon, j);
+            if (pi == null || pj == null) continue;
+            double ix = pi.lon();
+            double iy = pi.lat();
+            double jx = pj.lon();
+            double jy = pj.lat();
+
+            if (((iy > py) != (jy > py)) &&
+                (px < (jx - ix) * (py - iy) / (jy - iy + 1e-12) + ix)) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    private LatLon getLatLonFromList(List<?> list, int index) {
+        Object obj = list.get(index);
+        if (obj instanceof Node) {
+            return ((Node) obj).getCoor();
+        } else if (obj instanceof LatLon) {
+            return (LatLon) obj;
+        }
+        return null;
     }
 
     // ==========================================
@@ -1004,14 +1170,13 @@ public class GenerateBuildingsAction extends JosmAction {
         double sinR = Math.sin(headingRotation);
 
         for (Point2D pt : perimeter) {
-            // ROTATE IN METERS FIRST TO PREVENT ROTATIONAL WARPING AND SKEWING
-            double rotatedX = pt.x * cosR - pt.y * sinR;
-            double rotatedY = pt.x * sinR + pt.y * cosR;
+            double degX = pt.x / metersPerDegreeLon;
+            double degY = pt.y / metersPerDegreeLat;
 
-            double degLon = rotatedX / metersPerDegreeLon;
-            double degLat = rotatedY / metersPerDegreeLat;
+            double rotatedLon = degX * cosR - degY * sinR;
+            double rotatedLat = degX * sinR + degY * cosR;
 
-            nodes.add(new Node(new LatLon(center.lat() + degLat, center.lon() + degLon)));
+            nodes.add(new Node(new LatLon(center.lat() + rotatedLat, center.lon() + rotatedLon)));
         }
 
         return nodes;
