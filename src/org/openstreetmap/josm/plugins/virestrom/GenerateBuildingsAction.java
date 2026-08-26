@@ -709,87 +709,158 @@ public class GenerateBuildingsAction extends JosmAction {
     }
 
     // PROCEDURAL ADD-ON GENERATOR ENGINE
+    // PROCEDURAL DRIVEWAY GENERATOR ENGINE (V2 - Dynamic Styles & Collision Avoidance)
     private void generateDriveway(DataSet dataSet, List<Command> commands, LatLon roadPt, LatLon houseCenter, double houseHeading, double houseWidth, double setbackMeters, Random rand) {
         if (setbackMeters <= 2.0) return;
 
         double metersPerDegreeLat = 111000.0;
         double metersPerDegreeLon = metersPerDegreeLat * Math.cos(Math.toRadians(houseCenter.lat()));
 
-        boolean parkOnLeft = rand.nextBoolean();
-        double sideOffsetDist = (houseWidth / 2.0) + (1.5 + rand.nextDouble() * 2.0);
-        if (parkOnLeft) sideOffsetDist = -sideOffsetDist;
+        // --- 1. PICK DRIVEWAY ANCHOR (Front, Left, or Right) ---
+        // Side 0 = Front, 1 = Right, 2 = Left
+        int anchorSideChoice = rand.nextInt(3);
+        double anchorOffsetDistance = (houseWidth / 2.0) + (1.0 + rand.nextDouble() * 2.0);
 
+        // Compute relative offsets based on house orientation
         double perpOffsetAngle = houseHeading + Math.PI / 2.0;
+        double sideLat = 0.0;
+        double sideLon = 0.0;
 
-        double offsetLat = (sideOffsetDist * Math.sin(perpOffsetAngle)) / metersPerDegreeLat;
-        double offsetLon = (sideOffsetDist * Math.cos(perpOffsetAngle)) / metersPerDegreeLon;
+        if (anchorSideChoice == 1) { // Right side
+            sideLat = (anchorOffsetDistance * Math.sin(perpOffsetAngle)) / metersPerDegreeLat;
+            sideLon = (anchorOffsetDistance * Math.cos(perpOffsetAngle)) / metersPerDegreeLon;
+        } else if (anchorSideChoice == 2) { // Left side
+            sideLat = (-anchorOffsetDistance * Math.sin(perpOffsetAngle)) / metersPerDegreeLat;
+            sideLon = (-anchorOffsetDistance * Math.cos(perpOffsetAngle)) / metersPerDegreeLon;
+        }
+        // If anchorSideChoice == 0 (Front), sideLat/sideLon remains 0 so it anchors directly in front
 
-        LatLon drivewayEnd = new LatLon(houseCenter.lat() + offsetLat, houseCenter.lon() + offsetLon);
+        LatLon drivewayEnd = new LatLon(houseCenter.lat() + sideLat, houseCenter.lon() + sideLon);
 
-        List<Node> drivewayNodes = new ArrayList<>();
+        // --- 2. ROAD INTERSECTION ANGLE & BEND ---
+        // Vector heading from road toward the house target point
+        double directLat = drivewayEnd.lat() - roadPt.lat();
+        double directLon = drivewayEnd.lon() - roadPt.lon();
+        double roadToHouseAngle = Math.atan2(directLat, directLon);
 
-        Node startNode = new Node(roadPt);
-        commands.add(new AddCommand(dataSet, startNode));
-        drivewayNodes.add(startNode);
+        // Apply road intersection bend (> 20 degrees off road axis constraint)
+        double minAngleOffset = Math.toRadians(20.0);
+        double maxAngleOffset = Math.toRadians(55.0);
+        double bendOffset = minAngleOffset + rand.nextDouble() * (maxAngleOffset - minAngleOffset);
 
-        double lengthFeet = setbackMeters / 0.3048;
+        if (rand.nextBoolean()) bendOffset = -bendOffset; // Random left/right entry angle
 
-        if (lengthFeet > 70.0) {
-            int numInterNodes = 4 + rand.nextInt(4);
-            double curvatureStrength = 3.0 + rand.nextDouble() * 6.0;
-            boolean curveDirection = rand.nextBoolean();
+        // Final connection angle branching off the road
+        double entryAngle = roadToHouseAngle + bendOffset;
 
-            for (int i = 1; i < numInterNodes; i++) {
-                double t = (double) i / numInterNodes;
+        // --- 3. GENERATE MAIN DRIVEWAY PATH STYLES ---
+        List<LatLon> pathPoints = new ArrayList<>();
+        pathPoints.add(roadPt);
 
-                double interpLat = roadPt.lat() + t * (drivewayEnd.lat() - roadPt.lat());
-                double interpLon = roadPt.lon() + t * (drivewayEnd.lon() - roadPt.lon());
+        // Projected entry point into the property (15% to 30% along the path)
+        double entryDistMeters = Math.min(setbackMeters * 0.3, 8.0);
+        double entryLat = (entryDistMeters * Math.sin(entryAngle)) / metersPerDegreeLat;
+        double entryLon = (entryDistMeters * Math.cos(entryAngle)) / metersPerDegreeLon;
+        LatLon roadBendPt = new LatLon(roadPt.lat() + entryLat, roadPt.lon() + entryLon);
+        pathPoints.add(roadBendPt);
 
-                double sineWave = Math.sin(t * Math.PI);
-                double offsetAmount = sineWave * curvatureStrength;
-                if (!curveDirection) offsetAmount = -offsetAmount;
+        int styleChoice = rand.nextInt(3); // 0 = Mostly Straight, 1 = Long Sweeping Bend, 2 = Squiggly
+        int midSegments = 5;
 
-                double swayAngle = Math.atan2(drivewayEnd.lat() - roadPt.lat(), drivewayEnd.lon() - roadPt.lon()) + Math.PI / 2.0;
+        for (int i = 1; i <= midSegments; i++) {
+            double t = (double) i / (midSegments + 1);
+            double interpLat = roadBendPt.lat() + t * (drivewayEnd.lat() - roadBendPt.lat());
+            double interpLon = roadBendPt.lon() + t * (drivewayEnd.lon() - roadBendPt.lon());
 
-                double swayLat = (offsetAmount * Math.sin(swayAngle)) / metersPerDegreeLat;
-                double swayLon = (offsetAmount * Math.cos(swayAngle)) / metersPerDegreeLon;
+            double swayAmount = 0.0;
 
-                Node interNode = new Node(new LatLon(interpLat + swayLat, interpLon + swayLon));
-                commands.add(new AddCommand(dataSet, interNode));
-                drivewayNodes.add(interNode);
+            if (styleChoice == 1) { // Long Sweeping Bend
+                swayAmount = Math.sin(t * Math.PI) * (3.0 + rand.nextDouble() * 5.0);
+            } else if (styleChoice == 2) { // Squiggly
+                swayAmount = (rand.nextDouble() * 2.0 - 1.0) * 2.5;
+            } else { // Mostly Straight
+                swayAmount = (rand.nextDouble() * 2.0 - 1.0) * 0.5;
             }
-        } else {
-            if (rand.nextBoolean()) {
-                double interpLat = roadPt.lat() + 0.5 * (drivewayEnd.lat() - roadPt.lat());
-                double interpLon = roadPt.lon() + 0.5 * (drivewayEnd.lon() - roadPt.lon());
 
-                double wiggleDist = (rand.nextDouble() * 2.0 - 1.0);
-                double wiggleAngle = perpOffsetAngle;
+            double swayAngle = roadToHouseAngle + Math.PI / 2.0;
+            double swayLat = (swayAmount * Math.sin(swayAngle)) / metersPerDegreeLat;
+            double swayLon = (swayAmount * Math.cos(swayAngle)) / metersPerDegreeLon;
 
-                double wiggleLat = (wiggleDist * Math.sin(wiggleAngle)) / metersPerDegreeLat;
-                double wiggleLon = (wiggleDist * Math.cos(wiggleAngle)) / metersPerDegreeLon;
-
-                Node elbowNode = new Node(new LatLon(interpLat + wiggleLat, interpLon + wiggleLon));
-                commands.add(new AddCommand(dataSet, elbowNode));
-                drivewayNodes.add(elbowNode);
-            }
+            pathPoints.add(new LatLon(interpLat + swayLat, interpLon + swayLon));
         }
 
-        Node endNode = new Node(drivewayEnd);
-        commands.add(new AddCommand(dataSet, endNode));
-        drivewayNodes.add(endNode);
+        pathPoints.add(drivewayEnd);
+
+        // Build main driveway OSM nodes & way
+        List<Node> drivewayNodes = new ArrayList<>();
+        for (LatLon pt : pathPoints) {
+            Node n = new Node(pt);
+            commands.add(new AddCommand(dataSet, n));
+            drivewayNodes.add(n);
+        }
 
         Way drivewayWay = new Way();
         for (Node n : drivewayNodes) {
             drivewayWay.addNode(n);
         }
-
         drivewayWay.put("highway", "service");
         drivewayWay.put("lanes", "1");
         drivewayWay.put("service", "driveway");
         drivewayWay.put("width", "4");
-
         commands.add(new AddCommand(dataSet, drivewayWay));
+
+        // --- 4. TEARDROP / BULB TURNAROUND ENDING ---
+        boolean hasBulb = rand.nextBoolean();
+        if (hasBulb) {
+            double bulbRadius = (3.5 + rand.nextDouble() * 2.5); // Meters
+            List<Node> bulbNodes = new ArrayList<>();
+            int bulbSteps = 8;
+
+            for (int i = 0; i < bulbSteps; i++) {
+                double angle = (2.0 * Math.PI / bulbSteps) * i;
+                double bLat = (bulbRadius * Math.sin(angle)) / metersPerDegreeLat;
+                double bLon = (bulbRadius * Math.cos(angle)) / metersPerDegreeLon;
+
+                Node bNode = new Node(new LatLon(drivewayEnd.lat() + bLat, drivewayEnd.lon() + bLon));
+                commands.add(new AddCommand(dataSet, bNode));
+                bulbNodes.add(bNode);
+            }
+
+            Way bulbWay = new Way();
+            for (Node bn : bulbNodes) {
+                bulbWay.addNode(bn);
+            }
+            bulbWay.addNode(bulbNodes.get(0)); // Close loop
+            bulbWay.put("highway", "service");
+            bulbWay.put("service", "driveway");
+            bulbWay.put("area", "yes");
+            commands.add(new AddCommand(dataSet, bulbWay));
+        }
+
+        // --- 5. BRANCHING SECONDARY DRIVEWAYS ---
+        // Probability scales with length of driveway
+        double branchChance = Math.min(0.85, (setbackMeters / 60.0));
+        if (rand.nextDouble() < branchChance && drivewayNodes.size() > 4) {
+            // Pick a node along the middle of the main driveway to branch off
+            int branchStartIndex = 2 + rand.nextInt(drivewayNodes.size() - 4);
+            Node branchStartNode = drivewayNodes.get(branchStartIndex);
+
+            double branchAngle = roadToHouseAngle + (rand.nextBoolean() ? Math.PI / 3.0 : -Math.PI / 3.0);
+            double branchLength = (4.0 + rand.nextDouble() * 8.0); // Short branch distance
+
+            double branchLat = (branchLength * Math.sin(branchAngle)) / metersPerDegreeLat;
+            double branchLon = (branchLength * Math.cos(branchAngle)) / metersPerDegreeLon;
+
+            Node branchEndNode = new Node(new LatLon(branchStartNode.getCoor().lat() + branchLat, branchStartNode.getCoor().lon() + branchLon));
+            commands.add(new AddCommand(dataSet, branchEndNode));
+
+            Way branchWay = new Way();
+            branchWay.addNode(branchStartNode);
+            branchWay.addNode(branchEndNode);
+            branchWay.put("highway", "service");
+            branchWay.put("service", "driveway");
+            commands.add(new AddCommand(dataSet, branchWay));
+        }
     }
 
     private void generateBackyardShed(DataSet dataSet, List<Command> commands, LatLon houseCenter, double houseHeading, double setbackPerpAngle, Random rand) {
