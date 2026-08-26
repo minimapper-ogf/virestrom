@@ -5,72 +5,152 @@ import org.openstreetmap.josm.command.*;
 import org.openstreetmap.josm.data.coor.LatLon;
 import org.openstreetmap.josm.data.osm.*;
 import org.openstreetmap.josm.gui.MainApplication;
-import org.openstreetmap.josm.gui.Notification;
 import org.openstreetmap.josm.tools.Shortcut;
 import org.openstreetmap.josm.data.UndoRedoHandler;
+import org.openstreetmap.josm.spi.preferences.Config;
 
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.*;
 import java.util.List;
 
 public class GenerateBuildingsAction extends JosmAction {
 
     // ==========================================
-    //   USER CONFIGURABLE DIMENSION RATIOS
+    //   DYNAMIC BUILDING PROFILE DEFINITION
     // ==========================================
-    private static final double SHORT_SIDE_RATIO_MIN = 3.50;
-    private static final double SHORT_SIDE_RATIO_MAX = 4.20;
+    public static class BuildingProfile {
+        public String name;
+        public double minRatio;
+        public double maxRatio;
+        public double insetFrequency; // 0.0 to 1.0
+        public double minInsetDistance; // Minimum distance for insets/outsets in feet or meters
+        public double[] allowedAngles;
+        public boolean enabled = true;
 
-    private static final double LONG_SIDE_RATIO_MIN = 0.62;
-    private static final double LONG_SIDE_RATIO_MAX = 0.80;
+        public BuildingProfile(String name, double minRatio, double maxRatio, double insetFrequency, double minInsetDistance, double[] allowedAngles) {
+            this.name = name;
+            this.minRatio = minRatio;
+            this.maxRatio = maxRatio;
+            this.insetFrequency = insetFrequency;
+            this.minInsetDistance = minInsetDistance;
+            this.allowedAngles = allowedAngles;
+            this.enabled = true;
+        }
 
-    private static final double SQUARE_RATIO_MIN = 0.90;
-    private static final double SQUARE_RATIO_MAX = 1.10;
-    
-    // New customized Row House ratio profiles
-    private static final double ROW_STANDARD_RATIO_MIN = 1.5;
-    private static final double ROW_STANDARD_RATIO_MAX = 1.9;
+        // Helper to serialize profile into a single preference string
+        public String serialize() {
+            StringBuilder sb = new StringBuilder();
+            sb.append(name).append(";").append(minRatio).append(";").append(maxRatio).append(";")
+            .append(insetFrequency).append(";").append(minInsetDistance).append(";").append(enabled).append(";");
+            for (int i = 0; i < allowedAngles.length; i++) {
+                sb.append(allowedAngles[i]).append(i == allowedAngles.length - 1 ? "" : ",");
+            }
+            return sb.toString();
+        }
 
-    private static final double ROW_SQUARE_RATIO_MIN = 0.70;
-    private static final double ROW_SQUARE_RATIO_MAX = 0.90;
+        // Helper to deserialize profile from preference string
+        public static BuildingProfile deserialize(String data) {
+            try {
+                String[] parts = data.split(";");
+                String name = parts[0];
+                double minR = Double.parseDouble(parts[1]);
+                double maxR = Double.parseDouble(parts[2]);
+                double freq = Double.parseDouble(parts[3]);
+                double minDist = Double.parseDouble(parts[4]);
+                boolean enabled = Boolean.parseBoolean(parts[5]);
 
-    private static final double ROW_DEEP_RATIO_MIN = 2.1;
-    private static final double ROW_DEEP_RATIO_MAX = 2.5;
-    // ==========================================
+                String[] angParts = parts[6].split(",");
+                double[] angles = new double[angParts.length];
+                for (int i = 0; i < angParts.length; i++) {
+                    angles[i] = Double.parseDouble(angParts[i]);
+                }
+                BuildingProfile prof = new BuildingProfile(name, minR, maxR, freq, minDist, angles);
+                prof.enabled = enabled;
+                return prof;
+            } catch (Exception e) {
+                return null; // Fallback handling
+            }
+        }
 
+        @Override
+        public String toString() {
+            return String.format("%s (Ratio: %.2f - %.2f | Insets: %.0f%%)", name, minRatio, maxRatio, insetFrequency * 100);
+        }
+    }
+
+    // Default profiles initialized once per session and modified globally
+    private List<BuildingProfile> loadProfiles() {
+        List<String> rawProfiles = Config.getPref().getList("virestrom.building_profiles", null);
+        List<BuildingProfile> profiles = new ArrayList<>();
+
+        if (rawProfiles != null && !rawProfiles.isEmpty()) {
+            for (String s : rawProfiles) {
+                BuildingProfile p = BuildingProfile.deserialize(s);
+                if (p != null) profiles.add(p);
+            }
+        }
+
+        // Fallback defaults if no saved preferences exist
+        if (profiles.isEmpty()) {
+            profiles.add(new BuildingProfile("Deep", 2.40, 3.00, 0.80, 8.0, new double[]{Math.PI / 2.0}));
+            profiles.add(new BuildingProfile("60s", 0.62, 0.80, 0.45, 6.0, new double[]{Math.PI / 2.0}));
+            profiles.add(new BuildingProfile("Square", 0.90, 1.10, 0.30, 8.0, new double[]{Math.PI / 2.0, Math.PI / 4.0}));
+        }
+        return profiles;
+    }
+
+    // Save profiles back to JOSM preferences
+    private void saveProfiles(List<BuildingProfile> profiles) {
+        List<String> serialized = new ArrayList<>();
+        for (BuildingProfile p : profiles) {
+            serialized.add(p.serialize());
+        }
+        Config.getPref().putList("virestrom.building_profiles", serialized);
+    }
+
+    private final List<BuildingProfile> sessionProfiles = loadProfiles();
+
+
+    // Persistent state across runs in the same JOSM session
     private static String lastUnitSelection = "Sq Feet";
     private static String lastSizeValue = "1400";
-    
-    private static String lastSetbackMin = "15"; 
-    private static String lastSetbackMax = "35"; 
-    
-    private static String lastRotationLimit = "5.0"; 
+    private static String lastSetbackMin = "70";
+    private static String lastSetbackMax = "100";
+    private static String lastRotationLimit = "5.0";
 
     private static boolean lastAlignToRoad = true;
+    private static boolean lastGenerateAlongRoadMode = true;
+    private static String lastSpacingMin = "55";
+    private static String lastSpacingMax = "80";
+    private static String lastRoadSide = "Both";
 
-    private static boolean lastGenerateAlongRoadMode = false;
-    private static String lastSpacingMin = "10";
-    private static String lastSpacingMax = "25";
-    private static String lastRoadSide = "Both"; 
-
-    private static boolean lastUseShortSide = true;
-    private static boolean lastUseLongSide = false;
-    private static boolean lastUseSquare = false;
-    
-    private static boolean lastUseRowStandard = false;
-    private static boolean lastUseRowSquare = false;
-    private static boolean lastUseRowDeep = false;
-
-    // New persistent toggle states
+    private static boolean lastMakeRowHouses = false;
     private static boolean lastGenerateDriveways = false;
     private static boolean lastGenerateSheds = false;
 
     public GenerateBuildingsAction() {
         super("Generate Buildings", "building", "Generates procedural buildings inside selected areas or along roads",
                 Shortcut.registerShortcut("tools:generate_buildings", "Generate Buildings", KeyEvent.VK_Q, Shortcut.CTRL_SHIFT), true);
+    }
+
+    // Custom List Cell Renderer for Checkbox + Label
+    private static class CheckBoxListCellRenderer extends JCheckBox implements ListCellRenderer<BuildingProfile> {
+        @Override
+        public Component getListCellRendererComponent(JList<? extends BuildingProfile> list, BuildingProfile value, int index, boolean isSelected, boolean cellHasFocus) {
+            setSelected(value.enabled);
+            setText(value.toString());
+            setBackground(isSelected ? list.getSelectionBackground() : list.getBackground());
+            setForeground(isSelected ? list.getSelectionForeground() : list.getForeground());
+            setEnabled(list.isEnabled());
+            setFont(list.getFont());
+            setOpaque(true);
+            return this;
+        }
     }
 
     @Override
@@ -100,10 +180,11 @@ public class GenerateBuildingsAction extends JosmAction {
             return;
         }
 
-        // Expanded UI Layout to fit Driveway and Shed config
-        JPanel panel = new JPanel(new GridLayout(16, 2, 5, 5));
+        // UI PANEL CONFIGURATION
+        JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
+        JPanel settingsPanel = new JPanel(new GridLayout(10, 2, 5, 5));
+
         JTextField sizeField = new JTextField(lastSizeValue);
-        
         JTextField setbackMinField = new JTextField(lastSetbackMin, 5);
         JTextField setbackMaxField = new JTextField(lastSetbackMax, 5);
         JPanel setbackRangePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
@@ -112,7 +193,6 @@ public class GenerateBuildingsAction extends JosmAction {
         setbackRangePanel.add(setbackMaxField);
 
         JTextField rotationField = new JTextField(lastRotationLimit);
-        
         JComboBox<String> unitBox = new JComboBox<>(new String[]{"Sq Meters", "Sq Feet"});
         unitBox.setSelectedItem(lastUnitSelection);
         JCheckBox alignRoadBox = new JCheckBox("Align to Nearest Road", lastAlignToRoad);
@@ -127,22 +207,68 @@ public class GenerateBuildingsAction extends JosmAction {
         JComboBox<String> sideBox = new JComboBox<>(new String[]{"Both", "Left", "Right"});
         sideBox.setSelectedItem(lastRoadSide);
 
-        JCheckBox shortSideCheck = new JCheckBox("Urban Short Side", lastUseShortSide);
-        JCheckBox longSideCheck = new JCheckBox("Urban Long Side", lastUseLongSide);
-        JCheckBox squareCheck = new JCheckBox("Suburban Square", lastUseSquare);
-        
-        JCheckBox rowStandardCheck = new JCheckBox("Row House - Standard", lastUseRowStandard);
-        JCheckBox rowSquareCheck = new JCheckBox("Row House - Square", lastUseRowSquare);
-        JCheckBox rowDeepCheck = new JCheckBox("Row House - Deep", lastUseRowDeep);
-
+        JCheckBox makeRowHousesBox = new JCheckBox("Make All Selected Types Row Houses", lastMakeRowHouses);
         JCheckBox drivewayCheck = new JCheckBox("Generate Driveways", lastGenerateDriveways);
         JCheckBox shedCheck = new JCheckBox("Generate Sheds in Back", lastGenerateSheds);
 
-        // Helper event to check if any row house types are currently active
+        // Building Profiles List Model
+        DefaultListModel<BuildingProfile> profileListModel = new DefaultListModel<>();
+        for (BuildingProfile p : sessionProfiles) {
+            profileListModel.addElement(p);
+        }
+
+        JList<BuildingProfile> profileJList = new JList<>(profileListModel);
+        profileJList.setCellRenderer(new CheckBoxListCellRenderer());
+        profileJList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+
+        // Click handler to toggle checkbox on single click & open Edit Dialog on double click
+        profileJList.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent evt) {
+                int index = profileJList.locationToIndex(evt.getPoint());
+                if (index != -1) {
+                    BuildingProfile profile = profileListModel.getElementAt(index);
+                    if (evt.getClickCount() == 1) {
+                        profile.enabled = !profile.enabled;
+                        profileJList.repaint(profileJList.getCellBounds(index, index));
+                    } else if (evt.getClickCount() == 2) {
+                        showEditProfileDialog(profile, profileJList);
+                    }
+                }
+            }
+        });
+
+        JPanel profileButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        JButton addProfileBtn = new JButton("+ Add Type");
+        JButton removeProfileBtn = new JButton("- Remove Selected");
+        profileButtonPanel.add(addProfileBtn);
+        profileButtonPanel.add(removeProfileBtn);
+
+        // Add Profile Event
+        addProfileBtn.addActionListener(evt -> {
+            BuildingProfile newProf = new BuildingProfile("Custom Form", 1.2, 1.8, 0.5, 8.0, new double[]{Math.PI / 2.0, Math.PI / 4.0});
+            if (showEditProfileDialog(newProf, null)) {
+                sessionProfiles.add(newProf);
+                profileListModel.addElement(newProf);
+                saveProfiles(sessionProfiles); // Save configuration
+            }
+        });
+
+        // Remove Profile Event
+        removeProfileBtn.addActionListener(evt -> {
+            BuildingProfile selected = profileJList.getSelectedValue();
+            if (selected != null) {
+                sessionProfiles.remove(selected);
+                profileListModel.removeElement(selected);
+                saveProfiles(sessionProfiles); // Save configuration
+            }
+        });
+
+        // Interactive field updates
         Runnable updateInteractiveFields = () -> {
-            boolean rowActive = rowStandardCheck.isSelected() || rowSquareCheck.isSelected() || rowDeepCheck.isSelected();
+            boolean rowActive = makeRowHousesBox.isSelected();
             boolean roadOnly = alongRoadModeBox.isSelected();
-            
+
             if (rowActive) {
                 rotationField.setEnabled(false);
                 rotationField.setText("0.0");
@@ -152,11 +278,6 @@ public class GenerateBuildingsAction extends JosmAction {
                 drivewayCheck.setSelected(false);
                 shedCheck.setEnabled(false);
                 shedCheck.setSelected(false);
-                
-                // Clear out independent building shapes
-                shortSideCheck.setSelected(false);
-                longSideCheck.setSelected(false);
-                squareCheck.setSelected(false);
             } else {
                 rotationField.setEnabled(true);
                 rotationField.setText(lastRotationLimit);
@@ -170,59 +291,54 @@ public class GenerateBuildingsAction extends JosmAction {
         alongRoadModeBox.addItemListener(itemEvent -> {
             boolean active = alongRoadModeBox.isSelected();
             sideBox.setEnabled(active);
-            alignRoadBox.setEnabled(!active); 
+            alignRoadBox.setEnabled(!active);
             updateInteractiveFields.run();
         });
 
-        rowStandardCheck.addActionListener(actionEvent -> updateInteractiveFields.run());
-        rowSquareCheck.addActionListener(actionEvent -> updateInteractiveFields.run());
-        rowDeepCheck.addActionListener(actionEvent -> updateInteractiveFields.run());
+        makeRowHousesBox.addActionListener(actionEvent -> updateInteractiveFields.run());
 
-        // Initial GUI layout loads
         updateInteractiveFields.run();
         sideBox.setEnabled(lastGenerateAlongRoadMode);
         if (lastGenerateAlongRoadMode) {
             alignRoadBox.setEnabled(false);
         }
 
-        panel.add(new JLabel("Target Median Size:"));
-        panel.add(sizeField);
-        panel.add(new JLabel("Measurement Unit:"));
-        panel.add(unitBox);
-        panel.add(new JLabel("Setback Range (Min - Max):"));
-        panel.add(setbackRangePanel);
-        panel.add(new JLabel("Random Rotation Range (+/- Degrees):"));
-        panel.add(rotationField);
-        panel.add(new JLabel("Road-Only Generation:"));
-        panel.add(alongRoadModeBox);
-        panel.add(new JLabel("Building Spacing (Min - Max):"));
-        panel.add(spacingPanel);
-        panel.add(new JLabel("Placement Side of Road:"));
-        panel.add(sideBox);
-        panel.add(new JLabel("Alignment:"));
-        panel.add(alignRoadBox);
-        panel.add(new JLabel("Standard Forms:"));
-        panel.add(shortSideCheck);
-        panel.add(new JLabel(""));
-        panel.add(longSideCheck);
-        panel.add(new JLabel(""));
-        panel.add(squareCheck);
-        panel.add(new JLabel("Row House Forms:"));
-        panel.add(rowStandardCheck);
-        panel.add(new JLabel(""));
-        panel.add(rowSquareCheck);
-        panel.add(new JLabel(""));
-        panel.add(rowDeepCheck);
-        panel.add(new JLabel("Add-ons (Independent Only):"));
-        panel.add(drivewayCheck);
-        panel.add(new JLabel(""));
-        panel.add(shedCheck);
+        settingsPanel.add(new JLabel("Target Median Size:"));
+        settingsPanel.add(sizeField);
+        settingsPanel.add(new JLabel("Measurement Unit:"));
+        settingsPanel.add(unitBox);
+        settingsPanel.add(new JLabel("Setback Range (Min - Max):"));
+        settingsPanel.add(setbackRangePanel);
+        settingsPanel.add(new JLabel("Random Rotation Range (+/- Degrees):"));
+        settingsPanel.add(rotationField);
+        settingsPanel.add(new JLabel("Road-Only Generation:"));
+        settingsPanel.add(alongRoadModeBox);
+        settingsPanel.add(new JLabel("Building Spacing (Min - Max):"));
+        settingsPanel.add(spacingPanel);
+        settingsPanel.add(new JLabel("Placement Side of Road:"));
+        settingsPanel.add(sideBox);
+        settingsPanel.add(new JLabel("Alignment:"));
+        settingsPanel.add(alignRoadBox);
+        settingsPanel.add(new JLabel("Add-ons (Independent Only):"));
+        settingsPanel.add(drivewayCheck);
+        settingsPanel.add(new JLabel(""));
+        settingsPanel.add(shedCheck);
 
-        int result = JOptionPane.showConfirmDialog(MainApplication.getMainFrame(), panel,
+        JPanel profileSectionPanel = new JPanel(new BorderLayout(5, 5));
+        profileSectionPanel.setBorder(BorderFactory.createTitledBorder("Building Forms"));
+        profileSectionPanel.add(new JScrollPane(profileJList), BorderLayout.CENTER);
+        profileSectionPanel.add(profileButtonPanel, BorderLayout.NORTH);
+        profileSectionPanel.add(makeRowHousesBox, BorderLayout.SOUTH);
+
+        mainPanel.add(settingsPanel, BorderLayout.NORTH);
+        mainPanel.add(profileSectionPanel, BorderLayout.CENTER);
+
+        int result = JOptionPane.showConfirmDialog(MainApplication.getMainFrame(), mainPanel,
                 "Generate Buildings Configuration", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
 
         if (result != JOptionPane.OK_OPTION) return;
 
+        // Save session persistent states
         lastSizeValue = sizeField.getText();
         lastSetbackMin = setbackMinField.getText();
         lastSetbackMax = setbackMaxField.getText();
@@ -233,17 +349,25 @@ public class GenerateBuildingsAction extends JosmAction {
         lastSpacingMin = spacingMinField.getText();
         lastSpacingMax = spacingMaxField.getText();
         lastRoadSide = (String) sideBox.getSelectedItem();
-        
-        lastUseShortSide = shortSideCheck.isSelected();
-        lastUseLongSide = longSideCheck.isSelected();
-        lastUseSquare = squareCheck.isSelected();
-        
-        lastUseRowStandard = rowStandardCheck.isSelected();
-        lastUseRowSquare = rowSquareCheck.isSelected();
-        lastUseRowDeep = rowDeepCheck.isSelected();
 
+        lastMakeRowHouses = makeRowHousesBox.isSelected();
         lastGenerateDriveways = drivewayCheck.isSelected();
         lastGenerateSheds = shedCheck.isSelected();
+
+        // Extract active forms checked in list UI
+        List<BuildingProfile> activePool = new ArrayList<>();
+        for (int i = 0; i < profileListModel.getSize(); i++) {
+            BuildingProfile prof = profileListModel.getElementAt(i);
+            if (prof.enabled) {
+                activePool.add(prof);
+            }
+        }
+
+        if (activePool.isEmpty()) {
+            JOptionPane.showMessageDialog(MainApplication.getMainFrame(),
+                    "Please check/enable at least one Building Type form.", "Generate Buildings", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
 
         double targetAreaMeters;
         double targetSetbackMinMeters;
@@ -256,12 +380,12 @@ public class GenerateBuildingsAction extends JosmAction {
             double parsedAreaInput = Double.parseDouble(lastSizeValue);
             double parsedSetbackMinInput = Double.parseDouble(lastSetbackMin);
             double parsedSetbackMaxInput = Double.parseDouble(lastSetbackMax);
-            maxRotationDegrees = (lastUseRowStandard || lastUseRowSquare || lastUseRowDeep) ? 0.0 : Double.parseDouble(lastRotationLimit);
+            maxRotationDegrees = lastMakeRowHouses ? 0.0 : Double.parseDouble(lastRotationLimit);
             double parsedSpacingMinInput = Double.parseDouble(lastSpacingMin);
             double parsedSpacingMaxInput = Double.parseDouble(lastSpacingMax);
 
             double conversionFactor = "Sq Feet".equals(lastUnitSelection) ? 0.3048 : 1.0;
-            
+
             if ("Sq Feet".equals(lastUnitSelection)) {
                 targetAreaMeters = parsedAreaInput * 0.092903;
             } else {
@@ -292,33 +416,11 @@ public class GenerateBuildingsAction extends JosmAction {
             return;
         }
 
-        List<String> activeStyles = new ArrayList<>();
-        List<String> activeRowStyles = new ArrayList<>();
-
-        if (lastUseRowStandard) activeRowStyles.add("ROWHOUSE_STANDARD");
-        if (lastUseRowSquare) activeRowStyles.add("ROWHOUSE_SQUARE");
-        if (lastUseRowDeep) activeRowStyles.add("ROWHOUSE_DEEP");
-
-        boolean isRowMode = !activeRowStyles.isEmpty();
-
-        if (isRowMode) {
-            activeStyles.addAll(activeRowStyles);
-        } else {
-            if (lastUseShortSide) activeStyles.add("SHORT");
-            if (lastUseLongSide) activeStyles.add("LONG");
-            if (lastUseSquare) activeStyles.add("SQUARE");
-            if (activeStyles.isEmpty()) {
-                activeStyles.add("SHORT");
-            }
-        }
-
         List<Command> commands = new ArrayList<>();
         Random rand = new Random();
 
         if (lastGenerateAlongRoadMode) {
-            // ==========================================
-            //  ROAD-ONLY GENERATION ENGINE
-            // ==========================================
+            // ROAD-ONLY GENERATION ENGINE
             List<List<LatLon>> newlyCreatedPolygons = new ArrayList<>();
 
             for (Way road : roads) {
@@ -331,25 +433,17 @@ public class GenerateBuildingsAction extends JosmAction {
                 }
                 double totalRoadLength = cumDist[cumDist.length - 1];
 
-                double currentDist = rand.nextDouble() * (isRowMode ? 5.0 : spacingMaxMeters);
+                double currentDist = rand.nextDouble() * (lastMakeRowHouses ? 5.0 : spacingMaxMeters);
 
                 while (currentDist < totalRoadLength) {
-                    
-                    if (isRowMode) {
-                        String rowStyleForThisBlock = activeRowStyles.get(rand.nextInt(activeRowStyles.size()));
-                        
-                        double activeMinRatio;
-                        if ("ROWHOUSE_SQUARE".equals(rowStyleForThisBlock)) {
-                            activeMinRatio = ROW_SQUARE_RATIO_MIN;
-                        } else if ("ROWHOUSE_DEEP".equals(rowStyleForThisBlock)) {
-                            activeMinRatio = ROW_DEEP_RATIO_MIN;
-                        } else {
-                            activeMinRatio = ROW_STANDARD_RATIO_MIN;
-                        }
 
-                        double rowHouseWidth = Math.sqrt(targetAreaMeters / activeMinRatio);
-                        
-                        int numUnits = 4 + rand.nextInt(5); 
+                    if (lastMakeRowHouses) {
+                        BuildingProfile activeProfile = activePool.get(rand.nextInt(activePool.size()));
+                        double activeRatio = activeProfile.minRatio + rand.nextDouble() * (activeProfile.maxRatio - activeProfile.minRatio);
+
+                        double rowHouseWidth = Math.sqrt(targetAreaMeters / activeRatio);
+
+                        int numUnits = 4 + rand.nextInt(5);
                         double totalRowLengthNeeded = rowHouseWidth * numUnits;
 
                         if (currentDist + totalRowLengthNeeded > totalRoadLength) {
@@ -369,27 +463,25 @@ public class GenerateBuildingsAction extends JosmAction {
                         for (String side : sidesToGenerate) {
                             double sharedSetbackDist = targetSetbackMinMeters + rand.nextDouble() * (targetSetbackMaxMeters - targetSetbackMinMeters);
 
-                            // Calculate structural road angle at start of block to prevent wavy/overlapping staircasing
-                            RoadPoint rowStartPt = getPointAtDistance(road, currentDist + (rowHouseWidth / 2.0), cumDist);
-                            double continuousAngle = rowStartPt.angle;
-
-                            double perpAngle = "Left".equals(side) ? continuousAngle + Math.PI / 2.0 : continuousAngle - Math.PI / 2.0;
-                            double metersPerDegreeLat = 111000.0;
-                            double metersPerDegreeLon = metersPerDegreeLat * Math.cos(Math.toRadians(rowStartPt.pt.lat()));
-
-                            // Continuous Vector-Based Placement
                             for (int u = 0; u < numUnits; u++) {
-                                double offsetAlongRow = (u - (numUnits - 1) / 2.0) * rowHouseWidth;
+                                double unitDist = currentDist + (u * rowHouseWidth) + (rowHouseWidth / 2.0);
+                                if (unitDist > totalRoadLength) break;
 
-                                double centerLatOffset = (sharedSetbackDist * Math.sin(perpAngle) + offsetAlongRow * Math.sin(continuousAngle)) / metersPerDegreeLat;
-                                double centerLonOffset = (sharedSetbackDist * Math.cos(perpAngle) + offsetAlongRow * Math.cos(continuousAngle)) / metersPerDegreeLon;
+                                RoadPoint unitRoadPt = getPointAtDistance(road, unitDist, cumDist);
+                                double unitAngle = unitRoadPt.angle;
+                                double perpAngle = "Left".equals(side) ? unitAngle + Math.PI / 2.0 : unitAngle - Math.PI / 2.0;
 
-                                LatLon buildingCenter = new LatLon(rowStartPt.pt.lat() + centerLatOffset, rowStartPt.pt.lon() + centerLonOffset);
+                                double metersPerDegreeLat = 111000.0;
+                                double metersPerDegreeLon = metersPerDegreeLat * Math.cos(Math.toRadians(unitRoadPt.pt.lat()));
 
-                                List<Node> buildingNodes = createTransitionZoneNodes(buildingCenter, targetAreaMeters, continuousAngle, rowStyleForThisBlock, rand);
+                                double centerLatOffset = (sharedSetbackDist * Math.sin(perpAngle)) / metersPerDegreeLat;
+                                double centerLonOffset = (sharedSetbackDist * Math.cos(perpAngle)) / metersPerDegreeLon;
+
+                                LatLon buildingCenter = new LatLon(unitRoadPt.pt.lat() + centerLatOffset, unitRoadPt.pt.lon() + centerLonOffset);
+
+                                List<Node> buildingNodes = createTransitionZoneNodes(buildingCenter, targetAreaMeters, unitAngle, activeProfile, true, rand);
                                 if (buildingNodes.size() < 3) continue;
 
-                                // Prevent overlaps against tagged elements & highway objects
                                 if (intersectsExistingObjects(buildingNodes, dataSet, newlyCreatedPolygons)) {
                                     continue;
                                 }
@@ -407,24 +499,15 @@ public class GenerateBuildingsAction extends JosmAction {
                                 newlyCreatedPolygons.add(currentPolyCoords);
                             }
                         }
-                        
-                        currentDist += totalRowLengthNeeded + (15.0 * 0.3048); 
-                        
+
+                        currentDist += totalRowLengthNeeded + (15.0 * 0.3048);
+
                     } else {
-                        // Standard independent house generation along road
-                        String activeStyle = activeStyles.get(rand.nextInt(activeStyles.size()));
+                        BuildingProfile activeProfile = activePool.get(rand.nextInt(activePool.size()));
                         double variance = 0.90 + (1.10 - 0.90) * rand.nextDouble();
                         double currentTargetArea = targetAreaMeters * variance;
-                        
-                        double aspectRatio;
-                        if ("SQUARE".equals(activeStyle)) {
-                            aspectRatio = SQUARE_RATIO_MIN + (rand.nextDouble() * (SQUARE_RATIO_MAX - SQUARE_RATIO_MIN));
-                        } else if ("LONG".equals(activeStyle)) {
-                            aspectRatio = LONG_SIDE_RATIO_MIN + (rand.nextDouble() * (LONG_SIDE_RATIO_MAX - LONG_SIDE_RATIO_MIN));
-                        } else {
-                            aspectRatio = SHORT_SIDE_RATIO_MIN + (rand.nextDouble() * (SHORT_SIDE_RATIO_MAX - SHORT_SIDE_RATIO_MIN));
-                        }
-                        
+
+                        double aspectRatio = activeProfile.minRatio + rand.nextDouble() * (activeProfile.maxRatio - activeProfile.minRatio);
                         double buildingWidth = Math.sqrt(currentTargetArea / aspectRatio);
 
                         if (currentDist + (buildingWidth / 2.0) > totalRoadLength) break;
@@ -456,10 +539,9 @@ public class GenerateBuildingsAction extends JosmAction {
 
                             LatLon buildingCenter = new LatLon(roadPt.pt.lat() + offsetLat, roadPt.pt.lon() + offsetLon);
 
-                            List<Node> buildingNodes = createTransitionZoneNodes(buildingCenter, currentTargetArea, finalHeading, activeStyle, rand);
+                            List<Node> buildingNodes = createTransitionZoneNodes(buildingCenter, currentTargetArea, finalHeading, activeProfile, false, rand);
                             if (buildingNodes.size() < 3) continue;
 
-                            // Prevent overlaps against tagged elements & highway objects
                             if (intersectsExistingObjects(buildingNodes, dataSet, newlyCreatedPolygons)) {
                                 continue;
                             }
@@ -476,12 +558,10 @@ public class GenerateBuildingsAction extends JosmAction {
                             commands.add(new AddCommand(dataSet, buildingWay));
                             newlyCreatedPolygons.add(currentPolyCoords);
 
-                            // Optional Addon: Procedural Driveway
                             if (lastGenerateDriveways) {
                                 generateDriveway(dataSet, commands, roadPt.pt, buildingCenter, finalHeading, buildingWidth, setbackDist, rand);
                             }
 
-                            // Optional Addon: Procedural Backyard Shed
                             if (lastGenerateSheds) {
                                 generateBackyardShed(dataSet, commands, buildingCenter, finalHeading, perpAngle, rand);
                             }
@@ -493,13 +573,11 @@ public class GenerateBuildingsAction extends JosmAction {
                 }
             }
         } else {
-            // ==========================================
-            //  ORIGINAL GRID LOT GENERATION ENGINE
-            // ==========================================
+            // GRID LOT GENERATION ENGINE
             for (Way boundary : boundaries) {
                 LatLon center = getCentroid(boundary);
 
-                double variance = isRowMode ? 1.0 : (0.90 + (1.10 - 0.90) * rand.nextDouble());
+                double variance = lastMakeRowHouses ? 1.0 : (0.90 + (1.10 - 0.90) * rand.nextDouble());
                 double currentTargetArea = targetAreaMeters * variance;
 
                 double headingRotation;
@@ -509,13 +587,13 @@ public class GenerateBuildingsAction extends JosmAction {
                     headingRotation = rand.nextDouble() * 2 * Math.PI;
                 }
 
-                if (maxRotationDegrees > 0 && !isRowMode) {
+                if (maxRotationDegrees > 0 && !lastMakeRowHouses) {
                     double randomOffsetDegrees = (rand.nextDouble() * 2.0 - 1.0) * maxRotationDegrees;
                     headingRotation += Math.toRadians(randomOffsetDegrees);
                 }
 
-                String activeStyle = activeStyles.get(rand.nextInt(activeStyles.size()));
-                List<Node> buildingNodes = createTransitionZoneNodes(center, currentTargetArea, headingRotation, activeStyle, rand);
+                BuildingProfile activeProfile = activePool.get(rand.nextInt(activePool.size()));
+                List<Node> buildingNodes = createTransitionZoneNodes(center, currentTargetArea, headingRotation, activeProfile, lastMakeRowHouses, rand);
 
                 if (buildingNodes.size() < 3) continue;
 
@@ -527,8 +605,7 @@ public class GenerateBuildingsAction extends JosmAction {
                         double newLon = node.getCoor().lon() + shiftVector.lon();
                         node.setCoor(new LatLon(newLat, newLon));
                     }
-                    
-                    // Recompute precise shifted center
+
                     center = getCentroidOfNodes(buildingNodes);
                     finalSetback = getDistanceToNearestRoad(center, roads);
                 }
@@ -542,15 +619,13 @@ public class GenerateBuildingsAction extends JosmAction {
                 buildingWay.put("tobetagged", "yes");
                 commands.add(new AddCommand(dataSet, buildingWay));
 
-                if (!isRowMode && lastGenerateDriveways && !roads.isEmpty()) {
+                if (!lastMakeRowHouses && lastGenerateDriveways && !roads.isEmpty()) {
                     LatLon nearestRoadPt = getNearestRoadPoint(center, roads);
                     double buildingWidthEstimated = Math.sqrt(currentTargetArea);
                     generateDriveway(dataSet, commands, nearestRoadPt, center, headingRotation, buildingWidthEstimated, finalSetback, rand);
                 }
 
-                if (!isRowMode && lastGenerateSheds && !roads.isEmpty()) {
-                    double roadAngle = calculateRoadAngle(center, roads);
-                    // Determine setback direction vector pointing away from nearest road
+                if (!lastMakeRowHouses && lastGenerateSheds && !roads.isEmpty()) {
                     LatLon nearestRoadPt = getNearestRoadPoint(center, roads);
                     double dLat = center.lat() - nearestRoadPt.lat();
                     double dLon = center.lon() - nearestRoadPt.lon();
@@ -564,33 +639,95 @@ public class GenerateBuildingsAction extends JosmAction {
         dataSet.setSelected(selection);
     }
 
-    // ==========================================
-    //   PROCEDURAL ADD-ON GENERATOR ENGINE
-    // ==========================================
+    // Interactive Dialog helper for Adding/Editing Building Forms
+    private boolean showEditProfileDialog(BuildingProfile profile, JList<BuildingProfile> listToRepaint) {
+        JTextField nameF = new JTextField(profile.name);
+        JTextField minRF = new JTextField(String.valueOf(profile.minRatio));
+        JTextField maxRF = new JTextField(String.valueOf(profile.maxRatio));
+        JSlider freqSlider = new JSlider(0, 100, (int) (profile.insetFrequency * 100));
+        JTextField minDistF = new JTextField(String.valueOf(profile.minInsetDistance)); // New Field
 
+        boolean has90 = false, has45 = false, has225 = false;
+        if (profile.allowedAngles != null) {
+            for (double a : profile.allowedAngles) {
+                if (Math.abs(a - Math.PI / 2.0) < 0.01) has90 = true;
+                if (Math.abs(a - Math.PI / 4.0) < 0.01) has45 = true;
+                if (Math.abs(a - Math.PI / 8.0) < 0.01) has225 = true;
+            }
+        }
+
+        JCheckBox angle90 = new JCheckBox("90°", has90);
+        JCheckBox angle45 = new JCheckBox("45°", has45);
+        JCheckBox angle225 = new JCheckBox("22.5°", has225);
+
+        JPanel dlgPanel = new JPanel(new GridLayout(7, 2, 5, 5));
+        dlgPanel.add(new JLabel("Profile Name:"));
+        dlgPanel.add(nameF);
+        dlgPanel.add(new JLabel("Min Depth/Width Ratio:"));
+        dlgPanel.add(minRF);
+        dlgPanel.add(new JLabel("Max Depth/Width Ratio:"));
+        dlgPanel.add(maxRF);
+        dlgPanel.add(new JLabel("Inset Frequency (%):"));
+        dlgPanel.add(freqSlider);
+        dlgPanel.add(new JLabel("Min Inset/Outset Distance:")); // New Label
+        dlgPanel.add(minDistF);
+        dlgPanel.add(new JLabel("Allowed Angles:"));
+
+        JPanel anglesPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        anglesPanel.add(angle90);
+        anglesPanel.add(angle45);
+        anglesPanel.add(angle225);
+        dlgPanel.add(anglesPanel);
+
+        int res = JOptionPane.showConfirmDialog(MainApplication.getMainFrame(), dlgPanel,
+                "Edit Building Profile Form", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+
+        if (res == JOptionPane.OK_OPTION) {
+            try {
+                profile.name = nameF.getText();
+                profile.minRatio = Double.parseDouble(minRF.getText());
+                profile.maxRatio = Double.parseDouble(maxRF.getText());
+                profile.insetFrequency = freqSlider.getValue() / 100.0;
+                profile.minInsetDistance = Double.parseDouble(minDistF.getText()); // Read Value
+
+                List<Double> angList = new ArrayList<>();
+                if (angle90.isSelected()) angList.add(Math.PI / 2.0);
+                if (angle45.isSelected()) angList.add(Math.PI / 4.0);
+                if (angle225.isSelected()) angList.add(Math.PI / 8.0);
+                if (angList.isEmpty()) angList.add(Math.PI / 2.0);
+
+                profile.allowedAngles = new double[angList.size()];
+                for (int i = 0; i < angList.size(); i++) profile.allowedAngles[i] = angList.get(i);
+
+                if (listToRepaint != null) listToRepaint.repaint();
+                return true;
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(MainApplication.getMainFrame(), "Invalid numerical values entered.", "Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+        return false;
+    }
+
+    // PROCEDURAL ADD-ON GENERATOR ENGINE
     private void generateDriveway(DataSet dataSet, List<Command> commands, LatLon roadPt, LatLon houseCenter, double houseHeading, double houseWidth, double setbackMeters, Random rand) {
-        if (setbackMeters <= 2.0) return; // Too close to road to make a realistic driveway
+        if (setbackMeters <= 2.0) return;
 
         double metersPerDegreeLat = 111000.0;
         double metersPerDegreeLon = metersPerDegreeLat * Math.cos(Math.toRadians(houseCenter.lat()));
 
-        // Offset the parking spot to either the left or right side of the home
         boolean parkOnLeft = rand.nextBoolean();
-        double sideOffsetDist = (houseWidth / 2.0) + (1.5 + rand.nextDouble() * 2.0); // 1.5 - 3.5 meters side clearance
+        double sideOffsetDist = (houseWidth / 2.0) + (1.5 + rand.nextDouble() * 2.0);
         if (parkOnLeft) sideOffsetDist = -sideOffsetDist;
 
-        // Perpendicular offset angle from house heading
         double perpOffsetAngle = houseHeading + Math.PI / 2.0;
 
         double offsetLat = (sideOffsetDist * Math.sin(perpOffsetAngle)) / metersPerDegreeLat;
         double offsetLon = (sideOffsetDist * Math.cos(perpOffsetAngle)) / metersPerDegreeLon;
 
-        // Terminal parking pad node coordinates next to house
         LatLon drivewayEnd = new LatLon(houseCenter.lat() + offsetLat, houseCenter.lon() + offsetLon);
 
         List<Node> drivewayNodes = new ArrayList<>();
-        
-        // Start node on the public street
+
         Node startNode = new Node(roadPt);
         commands.add(new AddCommand(dataSet, startNode));
         drivewayNodes.add(startNode);
@@ -598,27 +735,22 @@ public class GenerateBuildingsAction extends JosmAction {
         double lengthFeet = setbackMeters / 0.3048;
 
         if (lengthFeet > 70.0) {
-            // SPECIAL HIGH-FIDELITY SHAPE: Multi-node curved estate driveway
-            int numInterNodes = 4 + rand.nextInt(4); // 4 to 7 intermediate winding nodes
-            
-            // Random sway strength factor
-            double curvatureStrength = 3.0 + rand.nextDouble() * 6.0; 
+            int numInterNodes = 4 + rand.nextInt(4);
+            double curvatureStrength = 3.0 + rand.nextDouble() * 6.0;
             boolean curveDirection = rand.nextBoolean();
 
             for (int i = 1; i < numInterNodes; i++) {
                 double t = (double) i / numInterNodes;
-                
-                // Linear step position
+
                 double interpLat = roadPt.lat() + t * (drivewayEnd.lat() - roadPt.lat());
                 double interpLon = roadPt.lon() + t * (drivewayEnd.lon() - roadPt.lon());
 
-                // Apply organic S-curve offset perpendicular to trajectory
                 double sineWave = Math.sin(t * Math.PI);
                 double offsetAmount = sineWave * curvatureStrength;
                 if (!curveDirection) offsetAmount = -offsetAmount;
 
                 double swayAngle = Math.atan2(drivewayEnd.lat() - roadPt.lat(), drivewayEnd.lon() - roadPt.lon()) + Math.PI / 2.0;
-                
+
                 double swayLat = (offsetAmount * Math.sin(swayAngle)) / metersPerDegreeLat;
                 double swayLon = (offsetAmount * Math.cos(swayAngle)) / metersPerDegreeLon;
 
@@ -627,16 +759,13 @@ public class GenerateBuildingsAction extends JosmAction {
                 drivewayNodes.add(interNode);
             }
         } else {
-            // STANDARD SHORT DRIVEWAY: 2-3 nodes (Straight, or single angled elbow)
             if (rand.nextBoolean()) {
-                // Add an intermediate node to make a nice elbow bend
                 double interpLat = roadPt.lat() + 0.5 * (drivewayEnd.lat() - roadPt.lat());
                 double interpLon = roadPt.lon() + 0.5 * (drivewayEnd.lon() - roadPt.lon());
-                
-                // Slight random wiggle offset
+
                 double wiggleDist = (rand.nextDouble() * 2.0 - 1.0);
                 double wiggleAngle = perpOffsetAngle;
-                
+
                 double wiggleLat = (wiggleDist * Math.sin(wiggleAngle)) / metersPerDegreeLat;
                 double wiggleLon = (wiggleDist * Math.cos(wiggleAngle)) / metersPerDegreeLon;
 
@@ -646,7 +775,6 @@ public class GenerateBuildingsAction extends JosmAction {
             }
         }
 
-        // Terminal node
         Node endNode = new Node(drivewayEnd);
         commands.add(new AddCommand(dataSet, endNode));
         drivewayNodes.add(endNode);
@@ -656,7 +784,6 @@ public class GenerateBuildingsAction extends JosmAction {
             drivewayWay.addNode(n);
         }
 
-        // Apply standardized OpenStreetMap tags for driveways
         drivewayWay.put("highway", "service");
         drivewayWay.put("lanes", "1");
         drivewayWay.put("service", "driveway");
@@ -669,23 +796,20 @@ public class GenerateBuildingsAction extends JosmAction {
         double metersPerDegreeLat = 111000.0;
         double metersPerDegreeLon = metersPerDegreeLat * Math.cos(Math.toRadians(houseCenter.lat()));
 
-        // Offset the shed behind the house (further down the road-setback vector)
-        double yardDepthOffset = 10.0 + rand.nextDouble() * 12.0; // 10 to 22 meters deep in the yard
-        double sideYardWiggle = (rand.nextDouble() * 2.0 - 1.0) * 4.0; // Side adjustment inside yard
+        double yardDepthOffset = 10.0 + rand.nextDouble() * 12.0;
+        double sideYardWiggle = (rand.nextDouble() * 2.0 - 1.0) * 4.0;
 
-        double backyardLat = (yardDepthOffset * Math.sin(setbackPerpAngle) + sideYardWiggle * Math.sin(setbackPerpAngle + Math.PI/2.0)) / metersPerDegreeLat;
-        double backyardLon = (yardDepthOffset * Math.cos(setbackPerpAngle) + sideYardWiggle * Math.cos(setbackPerpAngle + Math.PI/2.0)) / metersPerDegreeLon;
+        double backyardLat = (yardDepthOffset * Math.sin(setbackPerpAngle) + sideYardWiggle * Math.sin(setbackPerpAngle + Math.PI / 2.0)) / metersPerDegreeLat;
+        double backyardLon = (yardDepthOffset * Math.cos(setbackPerpAngle) + sideYardWiggle * Math.cos(setbackPerpAngle + Math.PI / 2.0)) / metersPerDegreeLon;
 
         LatLon shedCenter = new LatLon(houseCenter.lat() + backyardLat, houseCenter.lon() + backyardLon);
 
-        // Typical small backyard utility shed sizes: 8x10ft (~2.4x3m) up to 12x14ft (~3.6x4.2m)
         double shedWidth = (8.0 + rand.nextDouble() * 4.0) * 0.3048;
         double shedHeight = (10.0 + rand.nextDouble() * 4.0) * 0.3048;
 
         double halfW = shedWidth / 2.0;
         double halfH = shedHeight / 2.0;
 
-        // Base rectangular footprints
         List<Point2D> perimeter = new ArrayList<>();
         perimeter.add(new Point2D(-halfW, -halfH));
         perimeter.add(new Point2D(halfW, -halfH));
@@ -712,18 +836,14 @@ public class GenerateBuildingsAction extends JosmAction {
         for (Node n : shedNodes) {
             shedWay.addNode(n);
         }
-        shedWay.addNode(shedNodes.get(0)); // Close way
+        shedWay.addNode(shedNodes.get(0));
         shedWay.put("building", "shed");
 
         commands.add(new AddCommand(dataSet, shedWay));
     }
 
-    // ==========================================
-    //   COLLISION PREVENTATIVE MAPPING METHODS
-    // ==========================================
-
+    // COLLISION PREVENTATIVE MAPPING METHODS
     private boolean intersectsExistingObjects(List<Node> newBuildingNodes, DataSet dataSet, List<List<LatLon>> newlyCreatedPolygons) {
-        // Query database boundaries to inspect existing structures
         for (Way way : dataSet.getWays()) {
             if (way.hasKey("tobetagged") || way.hasKey("building") || way.hasKey("highway")) {
                 if (way.getNodesCount() < 2) continue;
@@ -736,7 +856,6 @@ public class GenerateBuildingsAction extends JosmAction {
                 }
             }
         }
-        // Query the local array containing geometries created in this process session
         for (List<LatLon> poly : newlyCreatedPolygons) {
             if (intersectsWay(newBuildingNodes, poly, true)) {
                 return true;
@@ -746,7 +865,6 @@ public class GenerateBuildingsAction extends JosmAction {
     }
 
     private boolean intersectsWay(List<Node> polyNodes, List<LatLon> wayCoords, boolean isClosed) {
-        // Perform an optimized quick-rejection Bounding Box Sweep Check
         double minX1 = Double.MAX_VALUE, maxX1 = -Double.MAX_VALUE;
         double minY1 = Double.MAX_VALUE, maxY1 = -Double.MAX_VALUE;
         for (Node n : polyNodes) {
@@ -771,7 +889,6 @@ public class GenerateBuildingsAction extends JosmAction {
             return false;
         }
 
-        // Direct Segment Intersection Evaluation
         int n1 = polyNodes.size();
         int n2 = wayCoords.size();
         int segments2 = isClosed ? n2 : n2 - 1;
@@ -788,7 +905,6 @@ public class GenerateBuildingsAction extends JosmAction {
             }
         }
 
-        // Point-in-polygon containment checks
         if (isClosed && n2 >= 3) {
             if (isPointInPolygon(polyNodes.get(0).getCoor(), wayCoords)) {
                 return true;
@@ -814,7 +930,6 @@ public class GenerateBuildingsAction extends JosmAction {
             return true;
         }
 
-        // Handle strict collinear cases
         if (o1 == 0 && onSegment(p1, p2, q1)) return true;
         if (o2 == 0 && onSegment(p1, q2, q1)) return true;
         if (o3 == 0 && onSegment(p2, p1, q2)) return true;
@@ -867,10 +982,7 @@ public class GenerateBuildingsAction extends JosmAction {
         return null;
     }
 
-    // ==========================================
-    //   ADDITIONAL MATH & DISTANCE HELPERS
-    // ==========================================
-
+    // ADDITIONAL MATH & DISTANCE HELPERS
     private LatLon getCentroidOfNodes(List<Node> nodes) {
         double lat = 0, lon = 0;
         for (Node n : nodes) {
@@ -903,7 +1015,7 @@ public class GenerateBuildingsAction extends JosmAction {
             for (int i = 0; i < road.getNodesCount() - 1; i++) {
                 Node n1 = road.getNode(i);
                 Node n2 = road.getNode(i + 1);
-                
+
                 double rx = n2.getCoor().lon() - n1.getCoor().lon();
                 double ry = n2.getCoor().lat() - n1.getCoor().lat();
                 double rLenSq = rx * rx + ry * ry;
@@ -1054,29 +1166,16 @@ public class GenerateBuildingsAction extends JosmAction {
         return new RoadPoint(lastPt, 0.0);
     }
 
-    private List<Node> createTransitionZoneNodes(LatLon center, double targetArea, double headingRotation, String style, Random rand) {
+    // DYNAMIC GEOMETRY INSET GENERATION ENGINE
+    private List<Node> createTransitionZoneNodes(LatLon center, double targetArea, double headingRotation, BuildingProfile profile, boolean isRowHouse, Random rand) {
         double metersPerDegreeLat = 111000.0;
         double metersPerDegreeLon = metersPerDegreeLat * Math.cos(Math.toRadians(center.lat()));
 
-        double minSegmentLengthMeters = 8.0 * 0.3048;
+        // Use selected profile unit conversion factor (feet -> meters vs meters -> meters)
+        double unitConversion = "Sq Feet".equals(lastUnitSelection) ? 0.3048 : 1.0;
+        double minSegmentLengthMeters = profile.minInsetDistance * unitConversion;
 
-        double aspectRatio;
-        boolean isRowType = style.startsWith("ROWHOUSE");
-
-        if ("SQUARE".equals(style)) {
-            aspectRatio = SQUARE_RATIO_MIN + (rand.nextDouble() * (SQUARE_RATIO_MAX - SQUARE_RATIO_MIN));
-        } else if ("LONG".equals(style)) {
-            aspectRatio = LONG_SIDE_RATIO_MIN + (rand.nextDouble() * (LONG_SIDE_RATIO_MAX - LONG_SIDE_RATIO_MIN));
-        } else if ("ROWHOUSE_SQUARE".equals(style)) {
-            aspectRatio = ROW_SQUARE_RATIO_MIN; 
-        } else if ("ROWHOUSE_DEEP".equals(style)) {
-            aspectRatio = ROW_DEEP_RATIO_MIN; 
-        } else if ("ROWHOUSE_STANDARD".equals(style)) {
-            aspectRatio = ROW_STANDARD_RATIO_MIN; 
-        } else {
-            aspectRatio = SHORT_SIDE_RATIO_MIN + (rand.nextDouble() * (SHORT_SIDE_RATIO_MAX - SHORT_SIDE_RATIO_MIN));
-        }
-
+        double aspectRatio = profile.minRatio + rand.nextDouble() * (profile.maxRatio - profile.minRatio);
         double baseWidthMeters = Math.sqrt(targetArea / aspectRatio);
         double baseHeightMeters = targetArea / baseWidthMeters;
 
@@ -1089,80 +1188,70 @@ public class GenerateBuildingsAction extends JosmAction {
         perimeter.add(new Point2D(halfW, halfH));
         perimeter.add(new Point2D(-halfW, halfH));
 
-        int totalCuts = rand.nextInt(4) + 1;
-        double cutScaleFactor = "LONG".equals(style) ? 0.45 : 0.60;
+        if (rand.nextDouble() < profile.insetFrequency) {
+            int totalCuts = rand.nextInt(3) + 1;
 
-        for (int c = 0; c < totalCuts; c++) {
-            if (perimeter.size() < 4) break;
+            for (int c = 0; c < totalCuts; c++) {
+                if (perimeter.size() < 4) break;
 
-            int edgeIndex = rand.nextInt(perimeter.size());
-            
-            if (isRowType) {
-                if (edgeIndex != 0 && edgeIndex != 2) {
-                    continue; 
+                int edgeIndex = rand.nextInt(perimeter.size());
+
+                if (isRowHouse && (edgeIndex != 0 && edgeIndex != 2)) {
+                    continue;
                 }
-            }
 
-            Point2D p1 = perimeter.get(edgeIndex);
-            Point2D p2 = perimeter.get((edgeIndex + 1) % perimeter.size());
+                Point2D p1 = perimeter.get(edgeIndex);
+                Point2D p2 = perimeter.get((edgeIndex + 1) % perimeter.size());
 
-            double edgeDx = p2.x - p1.x;
-            double edgeDy = p2.y - p1.y;
-            double edgeLength = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy);
+                double edgeDx = p2.x - p1.x;
+                double edgeDy = p2.y - p1.y;
+                double edgeLength = Math.sqrt(edgeDx * edgeDx + edgeDy * edgeDy);
 
-            if (edgeLength < (minSegmentLengthMeters * 3.0)) continue;
+                if (edgeLength < (minSegmentLengthMeters * 3.0)) continue;
 
-            double cutDepthMeters = ((2.0 + rand.nextDouble() * 8.0) * 0.3048) * cutScaleFactor;
-            double maxPossibleCutLength = edgeLength - (minSegmentLengthMeters * 2.0);
-            if (maxPossibleCutLength <= minSegmentLengthMeters) continue;
+                double cutDepthMeters = (2.0 + rand.nextDouble() * 6.0) * 0.3048;
+                double maxPossibleCutLength = edgeLength - (minSegmentLengthMeters * 2.0);
+                if (maxPossibleCutLength <= minSegmentLengthMeters) continue;
 
-            double cutLengthMeters = (minSegmentLengthMeters + rand.nextDouble() * (maxPossibleCutLength - minSegmentLengthMeters)) * cutScaleFactor;
-            if (cutLengthMeters < minSegmentLengthMeters) {
-                cutLengthMeters = minSegmentLengthMeters;
-            }
+                double cutLengthMeters = minSegmentLengthMeters + rand.nextDouble() * (maxPossibleCutLength - minSegmentLengthMeters);
 
-            double availableBufferSpace = edgeLength - cutLengthMeters - (minSegmentLengthMeters * 2.0);
-            double startOffset = minSegmentLengthMeters + (availableBufferSpace > 0 ? rand.nextDouble() * availableBufferSpace : 0);
+                double availableBufferSpace = edgeLength - cutLengthMeters - (minSegmentLengthMeters * 2.0);
+                double startOffset = minSegmentLengthMeters + (availableBufferSpace > 0 ? rand.nextDouble() * availableBufferSpace : 0);
 
-            double uX = edgeDx / edgeLength;
-            double uY = edgeDy / edgeLength;
+                double uX = edgeDx / edgeLength;
+                double uY = edgeDy / edgeLength;
 
-            Point2D cutStart = new Point2D(p1.x + uX * startOffset, p1.y + uY * startOffset);
-            Point2D cutEnd = new Point2D(cutStart.x + uX * cutLengthMeters, cutStart.y + uY * cutLengthMeters);
+                Point2D cutStart = new Point2D(p1.x + uX * startOffset, p1.y + uY * startOffset);
+                Point2D cutEnd = new Point2D(cutStart.x + uX * cutLengthMeters, cutStart.y + uY * cutLengthMeters);
 
-            double nX = -uY;
-            double nY = uX;
+                double chosenAngle = profile.allowedAngles[rand.nextInt(profile.allowedAngles.length)];
 
-            boolean makeCutOut = "LONG".equals(style) ? rand.nextDouble() < 0.85 : rand.nextBoolean();
+                double normX = -uY;
+                double normY = uX;
 
-            if (makeCutOut) {
-                double dotProduct = (cutStart.x * nX + cutStart.y * nY);
-                if (dotProduct < 0) {
-                    nX = -nX;
-                    nY = -nY;
+                double cutAngleOffsetDx = normX * Math.sin(chosenAngle) + uX * Math.cos(chosenAngle);
+                double cutAngleOffsetDy = normY * Math.sin(chosenAngle) + uY * Math.cos(chosenAngle);
+
+                boolean makeCutOut = rand.nextBoolean();
+                double directionFactor = makeCutOut ? 1.0 : -1.0;
+
+                Point2D cutStepIn = new Point2D(cutStart.x + cutAngleOffsetDx * cutDepthMeters * directionFactor,
+                                                cutStart.y + cutAngleOffsetDy * cutDepthMeters * directionFactor);
+                Point2D cutStepOut = new Point2D(cutEnd.x + cutAngleOffsetDx * cutDepthMeters * directionFactor,
+                                                 cutEnd.y + cutAngleOffsetDy * cutDepthMeters * directionFactor);
+
+                List<Point2D> nextPerimeter = new ArrayList<>();
+                for (int i = 0; i < perimeter.size(); i++) {
+                    nextPerimeter.add(perimeter.get(i));
+                    if (i == edgeIndex) {
+                        nextPerimeter.add(cutStart);
+                        nextPerimeter.add(cutStepIn);
+                        nextPerimeter.add(cutStepOut);
+                        nextPerimeter.add(cutEnd);
+                    }
                 }
-            } else {
-                double dotProduct = (cutStart.x * nX + cutStart.y * nY);
-                if (dotProduct > 0) {
-                    nX = -nX;
-                    nY = -nY;
-                }
+                perimeter = nextPerimeter;
             }
-
-            Point2D cutStepIn = new Point2D(cutStart.x + nX * cutDepthMeters, cutStart.y + nY * cutDepthMeters);
-            Point2D cutStepOut = new Point2D(cutEnd.x + nX * cutDepthMeters, cutEnd.y + nY * cutDepthMeters);
-
-            List<Point2D> nextPerimeter = new ArrayList<>();
-            for (int i = 0; i < perimeter.size(); i++) {
-                nextPerimeter.add(perimeter.get(i));
-                if (i == edgeIndex) {
-                    nextPerimeter.add(cutStart);
-                    nextPerimeter.add(cutStepIn);
-                    nextPerimeter.add(cutStepOut);
-                    nextPerimeter.add(cutEnd);
-                }
-            }
-            perimeter = nextPerimeter;
         }
 
         List<Node> nodes = new ArrayList<>();
