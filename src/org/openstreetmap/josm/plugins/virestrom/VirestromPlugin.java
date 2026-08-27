@@ -14,6 +14,7 @@ public class VirestromPlugin extends Plugin {
         GenerateAdminTagsAction adminAction = new GenerateAdminTagsAction();
         GenerateBuildingsAction buildingsAction = new GenerateBuildingsAction();
         SplitAction splitAction = new SplitAction();
+        DivideWayAction divideWayAction = new DivideWayAction();
 
         SwingUtilities.invokeLater(() -> {
             MainMenu menu = MainApplication.getMenu();
@@ -29,6 +30,9 @@ public class VirestromPlugin extends Plugin {
 
             menu.add(menu.toolsMenu, splitAction);
             MainApplication.getToolbar().register(splitAction);
+
+            menu.add(menu.toolsMenu, divideWayAction);
+            MainApplication.getToolbar().register(divideWayAction);
         });
     }
 }
